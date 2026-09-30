@@ -22,7 +22,7 @@ CODEBASE = {
     "test_files": 114,
     "test_lines": 61_396,
     "tests_collected": 2_061,
-    "tests_passing": 2_061,
+    "tests_passing": 2_055,
     "api_routes": 422,
     "api_paths": 351,
     "db_tables": 88,

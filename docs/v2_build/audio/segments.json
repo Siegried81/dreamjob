@@ -1,0 +1,50 @@
+[
+ {
+  "i": 1,
+  "text": "Welcome to Dream Job, an AI-assisted job search platform.",
+  "file": "audio/seg1.mp3",
+  "dur": 3.936
+ },
+ {
+  "i": 2,
+  "text": "Everything starts with your profile. A LinkedIn export and a CV are merged into one traceable profile, with every disagreement surfaced rather than hidden.",
+  "file": "audio/seg2.mp3",
+  "dur": 8.88
+ },
+ {
+  "i": 3,
+  "text": "On the Opportunities screen, every advertised role and every speculative opening is collected, ranked, and explained.",
+  "file": "audio/seg3.mp3",
+  "dur": 7.032
+ },
+ {
+  "i": 4,
+  "text": "Then the Apply browser shows the prepared applications: the email, the CV, the briefing, and the motivation document.",
+  "file": "audio/seg4.mp3",
+  "dur": 6.552
+ },
+ {
+  "i": 5,
+  "text": "The email is written from the profile, and the generated CV is grounded in it. Nothing appears that cannot be traced back.",
+  "file": "audio/seg5.mp3",
+  "dur": 7.248
+ },
+ {
+  "i": 6,
+  "text": "A consistency check catches invented employers, dates and titles, and a leak scan keeps private documents out of the attachment.",
+  "file": "audio/seg6.mp3",
+  "dur": 7.2
+ },
+ {
+  "i": 7,
+  "text": "Nothing is ever sent automatically. The job seeker reads, edits and approves every message. Here we stop before sending.",
+  "file": "audio/seg7.mp3",
+  "dur": 7.896
+ },
+ {
+  "i": 8,
+  "text": "That was one minute of Dream Job. Profile in, ranked opportunities out, and you in control of every single send.",
+  "file": "audio/seg8.mp3",
+  "dur": 6.696
+ }
+]

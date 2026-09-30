@@ -1,0 +1,36 @@
+{
+  "backend_files": 227,
+  "backend_lines": 120881,
+  "frontend_files": 140,
+  "frontend_lines": 43932,
+  "test_files": 114,
+  "test_lines": 61396,
+  "tests_collected": 2061,
+  "api_routes": 422,
+  "api_paths": 351,
+  "api_routers": 22,
+  "db_tables": 88,
+  "db_private": 49,
+  "db_shared": 38,
+  "db_indexes": 158,
+  "db_fts": 2,
+  "migrations": 43,
+  "adapters": 29,
+  "adapters_ack": 4,
+  "prompt_templates": 24,
+  "topbar": {
+    "companies": 5941,
+    "jobs": 57293,
+    "contacts": 3959
+  },
+  "live": {
+    "opportunities_found": 1084,
+    "speculative": 21,
+    "ranked": 939,
+    "with_contact": 4,
+    "prepared": 6,
+    "sent": 1,
+    "responses": 0
+  },
+  "tests_passing": 2055
+}

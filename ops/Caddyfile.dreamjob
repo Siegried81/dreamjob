@@ -1,0 +1,115 @@
+# =============================================================================
+# Caddyfile.dreamjob — public vhost for dreamjob.one.witysk.org (node: macstudio)
+# =============================================================================
+# Imported by one line at the end of onevoice's react/Caddyfile.macstudio, which
+# is the config the org.witysk.onevoice.caddy LaunchDaemon actually runs. Keeping
+# the body here rather than inline in that file means the onevoice repo carries a
+# one-line diff and this deployment owns its own routing.
+#
+# RELOADING: caddy_run.sh exports BACKEND_PORT from
+# onevoice/react/local/run/backend_port (8002 today) before `caddy run`. A bare
+# `caddy reload` does NOT inherit that, so the onevoice vhost would fall back to
+# the Caddyfile default :8000 and every one.witysk.org /api/* would 502 — the
+# 2026-08-15 outage, re-created. Always reload with it exported:
+#
+#   cd /Users/nstephane/Dev/onevoice
+#   BACKEND_PORT="$(cat react/local/run/backend_port)" \
+#     /opt/homebrew/bin/caddy reload --config react/Caddyfile.macstudio
+#
+# TLS: *.one.witysk.org already resolves to the public IP and :443 forwards to
+# this node (it holds the one.witysk.org Let's Encrypt cert), so ACME for this
+# name succeeds on its own. No cert pre-staging needed.
+#
+# PORTS: the Dream Job backend listens on 127.0.0.1:8420. 8000 (the app's own
+# default) and 8002 are onevoice's backend, 8100 its AI gateway, 5173 another
+# node process — all avoided deliberately.
+# =============================================================================
+
+dreamjob.one.witysk.org {
+	tls {
+		protocols tls1.2 tls1.3
+	}
+
+	# The SPA is entirely self-hosted: no CDN, no web fonts, no third-party
+	# script, and it opens no WebSocket or EventSource (verified against
+	# frontend/src before this was written). So 'self' is a real policy here
+	# rather than an aspiration. 'unsafe-inline' for style only — React sets
+	# element styles inline. Gmail/Google API URLs in the SPA are links the
+	# user clicks, not fetches, so they need no connect-src entry.
+	@app {
+		not path /api/*
+	}
+	header @app {
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+	}
+	header {
+		Strict-Transport-Security "max-age=63072000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+		-X-Powered-By
+	}
+
+	encode zstd gzip
+
+	log {
+		output file /Users/nstephane/Dev/dreamjob/logs/caddy_access.log {
+			roll_size 32MiB
+			roll_keep 4
+			roll_keep_for 336h
+		}
+	}
+
+	# CV / LinkedIn-export uploads (FR-101). The backend takes PDFs and export
+	# archives; 100MB is well clear of either and still bounded.
+	request_body {
+		max_size 100MB
+	}
+
+	# Block dotfile probes (/.env, /.git/config) but keep /.well-known/* so ACME
+	# challenges resolve. Must be `handle` (terminal): the Caddyfile adapter
+	# sorts a bare `respond` AFTER the catch-all, where it is never reached.
+	@dotfiles {
+		path */.* */.*/*
+		not path /.well-known/*
+	}
+	handle @dotfiles {
+		respond 403
+	}
+
+	# --- API (backend) -------------------------------------------------------
+	# Long timeouts: pipeline routes kick off collection, profiling, financial
+	# and generation runs that legitimately hold a request open for minutes.
+	# flush_interval -1 disables response buffering so progress output is not
+	# held back by the proxy.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8420 {
+			transport http {
+				read_timeout 1800s
+				write_timeout 1800s
+			}
+			header_up X-Real-IP {remote_host}
+			flush_interval -1
+		}
+	}
+
+	# --- Frontend (production build, served by Caddy) ------------------------
+	# Vite emits content-hashed filenames under /assets, so those are immutable.
+	handle /assets/* {
+		header Cache-Control "public, max-age=31536000, immutable"
+		root * /Users/nstephane/Dev/dreamjob/frontend/dist
+		file_server
+	}
+
+	# Everything else is the SPA shell. Never cached, so a rebuild's new bundle
+	# hash is picked up on the next load. FastAPI's /docs and /openapi.json are
+	# deliberately NOT proxied: the API reference stays on the loopback port.
+	handle {
+		header Cache-Control "no-cache, no-store, must-revalidate"
+		root * /Users/nstephane/Dev/dreamjob/frontend/dist
+		try_files {path} /index.html
+		file_server
+	}
+}

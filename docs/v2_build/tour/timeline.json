@@ -1,0 +1,429 @@
+{
+ "marks": [
+  {
+   "name": "signin:start",
+   "t": 1.212
+  },
+  {
+   "name": "signin:end",
+   "t": 4.733
+  },
+  {
+   "name": "home:start",
+   "t": 4.733
+  },
+  {
+   "name": "home:end",
+   "t": 12.993
+  },
+  {
+   "name": "overview:start",
+   "t": 12.993
+  },
+  {
+   "name": "overview:end",
+   "t": 21.25
+  },
+  {
+   "name": "profile:start",
+   "t": 21.25
+  },
+  {
+   "name": "profile:end",
+   "t": 28.513
+  },
+  {
+   "name": "profile-conflicts:start",
+   "t": 28.513
+  },
+  {
+   "name": "profile-conflicts:end",
+   "t": 35.21
+  },
+  {
+   "name": "profile-skills:start",
+   "t": 35.21
+  },
+  {
+   "name": "profile-skills:end",
+   "t": 41.848
+  },
+  {
+   "name": "profile-evidence:start",
+   "t": 41.848
+  },
+  {
+   "name": "profile-evidence:end",
+   "t": 48.489
+  },
+  {
+   "name": "profile-personas:start",
+   "t": 48.489
+  },
+  {
+   "name": "profile-personas:end",
+   "t": 55.128
+  },
+  {
+   "name": "profile-privacy:start",
+   "t": 55.128
+  },
+  {
+   "name": "profile-privacy:end",
+   "t": 61.795
+  },
+  {
+   "name": "composite:start",
+   "t": 61.795
+  },
+  {
+   "name": "composite:end",
+   "t": 68.164
+  },
+  {
+   "name": "composite-findings:start",
+   "t": 68.164
+  },
+  {
+   "name": "composite-findings:end",
+   "t": 75.73
+  },
+  {
+   "name": "composite-enrichment:start",
+   "t": 75.73
+  },
+  {
+   "name": "composite-enrichment:end",
+   "t": 82.385
+  },
+  {
+   "name": "dream-job:start",
+   "t": 82.385
+  },
+  {
+   "name": "dream-job:end",
+   "t": 89.65
+  },
+  {
+   "name": "directives:start",
+   "t": 89.65
+  },
+  {
+   "name": "directives:end",
+   "t": 97.919
+  },
+  {
+   "name": "campaigns:start",
+   "t": 97.919
+  },
+  {
+   "name": "campaigns:end",
+   "t": 106.209
+  },
+  {
+   "name": "campaign-plan:start",
+   "t": 108.092
+  },
+  {
+   "name": "campaign-plan:end",
+   "t": 114.436
+  },
+  {
+   "name": "campaign-live:start",
+   "t": 114.436
+  },
+  {
+   "name": "campaign-live:end",
+   "t": 121.095
+  },
+  {
+   "name": "campaign-rerun:start",
+   "t": 121.095
+  },
+  {
+   "name": "campaign-rerun:end",
+   "t": 127.734
+  },
+  {
+   "name": "browser:start",
+   "t": 127.734
+  },
+  {
+   "name": "browser:end",
+   "t": 136.032
+  },
+  {
+   "name": "opportunities:start",
+   "t": 136.032
+  },
+  {
+   "name": "opportunities:end",
+   "t": 145.307
+  },
+  {
+   "name": "opportunity-detail:start",
+   "t": 147.006
+  },
+  {
+   "name": "opportunity-detail:end",
+   "t": 154.257
+  },
+  {
+   "name": "companies:start",
+   "t": 154.257
+  },
+  {
+   "name": "companies:end",
+   "t": 162.542
+  },
+  {
+   "name": "company-financials:start",
+   "t": 164.228
+  },
+  {
+   "name": "company-financials:end",
+   "t": 169.57
+  },
+  {
+   "name": "company-market:start",
+   "t": 169.57
+  },
+  {
+   "name": "company-market:end",
+   "t": 176.254
+  },
+  {
+   "name": "company-values:start",
+   "t": 176.254
+  },
+  {
+   "name": "company-values:end",
+   "t": 182.926
+  },
+  {
+   "name": "intel-gaps:start",
+   "t": 186.799
+  },
+  {
+   "name": "intel-gaps:end",
+   "t": 193.407
+  },
+  {
+   "name": "intel-stepping:start",
+   "t": 193.407
+  },
+  {
+   "name": "intel-stepping:end",
+   "t": 200.975
+  },
+  {
+   "name": "intel-fit:start",
+   "t": 200.975
+  },
+  {
+   "name": "intel-fit:end",
+   "t": 207.62
+  },
+  {
+   "name": "intel-values:start",
+   "t": 207.62
+  },
+  {
+   "name": "intel-values:end",
+   "t": 214.256
+  },
+  {
+   "name": "intel-linkedin:start",
+   "t": 214.256
+  },
+  {
+   "name": "intel-linkedin:end",
+   "t": 221.812
+  },
+  {
+   "name": "contacts:start",
+   "t": 221.812
+  },
+  {
+   "name": "contacts:end",
+   "t": 229.18
+  },
+  {
+   "name": "contacts-browse:start",
+   "t": 229.18
+  },
+  {
+   "name": "contacts-browse:end",
+   "t": 236.75
+  },
+  {
+   "name": "contacts-intros:start",
+   "t": 236.75
+  },
+  {
+   "name": "contacts-intros:end",
+   "t": 244.31
+  },
+  {
+   "name": "contacts-network:start",
+   "t": 244.31
+  },
+  {
+   "name": "contacts-network:end",
+   "t": 250.954
+  },
+  {
+   "name": "contacts-retention:start",
+   "t": 250.954
+  },
+  {
+   "name": "contacts-retention:end",
+   "t": 257.596
+  },
+  {
+   "name": "apply-email:start",
+   "t": 257.596
+  },
+  {
+   "name": "apply-email:end",
+   "t": 264.973
+  },
+  {
+   "name": "apply-cv:start",
+   "t": 264.973
+  },
+  {
+   "name": "apply-cv:end",
+   "t": 272.561
+  },
+  {
+   "name": "apply-briefing:start",
+   "t": 272.561
+  },
+  {
+   "name": "apply-briefing:end",
+   "t": 279.212
+  },
+  {
+   "name": "apply-motivation:start",
+   "t": 279.212
+  },
+  {
+   "name": "apply-motivation:end",
+   "t": 285.875
+  },
+  {
+   "name": "apply-checks:start",
+   "t": 285.875
+  },
+  {
+   "name": "apply-checks:end",
+   "t": 292.561
+  },
+  {
+   "name": "networking:start",
+   "t": 292.562
+  },
+  {
+   "name": "networking:end",
+   "t": 298.137
+  },
+  {
+   "name": "networking-events:start",
+   "t": 298.138
+  },
+  {
+   "name": "networking-events:end",
+   "t": 305.801
+  },
+  {
+   "name": "networking-export:start",
+   "t": 305.801
+  },
+  {
+   "name": "networking-export:end",
+   "t": 312.48
+  },
+  {
+   "name": "pipeline:start",
+   "t": 312.48
+  },
+  {
+   "name": "pipeline:end",
+   "t": 320.877
+  },
+  {
+   "name": "responses:start",
+   "t": 320.877
+  },
+  {
+   "name": "responses:end",
+   "t": 329.154
+  },
+  {
+   "name": "insights:start",
+   "t": 329.154
+  },
+  {
+   "name": "insights:end",
+   "t": 337.423
+  },
+  {
+   "name": "monitoring:start",
+   "t": 337.423
+  },
+  {
+   "name": "monitoring:end",
+   "t": 345.684
+  },
+  {
+   "name": "mail:start",
+   "t": 345.684
+  },
+  {
+   "name": "mail:end",
+   "t": 353.955
+  },
+  {
+   "name": "admin:start",
+   "t": 353.955
+  },
+  {
+   "name": "admin:end",
+   "t": 359.308
+  },
+  {
+   "name": "admin-sources:start",
+   "t": 359.308
+  },
+  {
+   "name": "admin-sources:end",
+   "t": 366.931
+  },
+  {
+   "name": "admin-models:start",
+   "t": 366.931
+  },
+  {
+   "name": "admin-models:end",
+   "t": 374.477
+  },
+  {
+   "name": "admin-data:start",
+   "t": 374.477
+  },
+  {
+   "name": "admin-data:end",
+   "t": 382.039
+  },
+  {
+   "name": "help:start",
+   "t": 382.039
+  },
+  {
+   "name": "help:end",
+   "t": 389.69
+  }
+ ],
+ "end": 390.89096903800964
+}
