@@ -44,6 +44,7 @@ from datetime import datetime, timedelta
 from email.message import EmailMessage
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urlparse
 
 from dreamjob.adapters.base import NormalisedRecord
 from dreamjob.adapters.vacancy_source import (
@@ -77,9 +78,12 @@ class AlertSource:
     sender_prefixes: tuple[str, ...]
     #: Matches a posting link and captures its id.
     link_re: re.Pattern[str]
-    #: The canonical posting URL built from the id, or ``None`` to keep the
-    #: matched URL without its tracking query.
+    #: The canonical posting URL built from ``{id}`` (and the link's ``{host}``),
+    #: or ``None`` to keep the matched URL without its tracking query.
     canonical: str | None
+    #: ``title_first`` (LinkedIn, ictjob) or ``employer_first`` (Glassdoor:
+    #: employer, rating, title, place inside the posting link).
+    layout: str = "title_first"
 
 
 ALERT_SOURCES: tuple[AlertSource, ...] = (
@@ -100,12 +104,26 @@ ALERT_SOURCES: tuple[AlertSource, ...] = (
         link_re=re.compile(r"ictjob\.be/[^\s\"'<>?#]*?[-/](\d{5,})(?=[/?#\"'\s]|$)", re.IGNORECASE),
         canonical=None,
     ),
+    AlertSource(
+        key="alert.glassdoor",
+        label="Glassdoor job alert",
+        sender_domain="glassdoor.com",
+        sender_prefixes=("noreply",),
+        # Every posting link carries a stable jobListingId among its tracking
+        # parameters; the canonical URL keeps only that.
+        link_re=re.compile(
+            r"glassdoor\.[a-z.]+/partner/jobListing\.htm\?[^\s\"'<>]*?jobListingId=(\d+)",
+            re.IGNORECASE,
+        ),
+        canonical="https://{host}/partner/jobListing.htm?jobListingId={id}",
+        layout="employer_first",
+    ),
 )
 
 #: Gmail search for the alert senders; ``after:`` or ``newer_than:`` is added.
 GMAIL_QUERY = (
     "from:(jobalerts-noreply@linkedin.com OR jobs-noreply@linkedin.com "
-    "OR jobs-listings@linkedin.com OR ictjob.be)"
+    "OR jobs-listings@linkedin.com OR ictjob.be OR noreply@glassdoor.com)"
 )
 
 #: How far back the first pass of a newly connected mailbox looks.
@@ -121,7 +139,8 @@ _BUTTON_TEXTS = {
     "view job", "view jobs", "see all jobs", "apply", "easy apply", "apply now",
     "voir l'offre", "voir les offres", "postuler", "candidature simplifiée",
     "bekijk vacature", "bekijk vacatures", "solliciteren", "vacature bekijken",
-    "more", "plus", "meer",
+    "more", "plus", "meer", "candidature facile", "afficher plus", "show more",
+    "snel solliciteren", "toon meer",
 }
 
 
@@ -172,7 +191,7 @@ def _html_of(message: EmailMessage) -> str:
 
 def _posting_url(source: AlertSource, href: str, posting_id: str) -> str:
     if source.canonical:
-        return source.canonical.format(id=posting_id)
+        return source.canonical.format(id=posting_id, host=urlparse(href).netloc)
     return href.split("?", 1)[0].split("#", 1)[0]
 
 
@@ -217,11 +236,36 @@ def parse_alert(message: EmailMessage, source: AlertSource) -> list[dict[str, An
 
     postings: list[dict[str, Any]] = []
     for posting_id in order:
-        posting = _read_posting(linked[posting_id], pieces)
+        if source.layout == "employer_first":
+            posting = _read_employer_first([t for t, _ in linked[posting_id]])
+        else:
+            posting = _read_posting(linked[posting_id], pieces)
         if posting is None:
             continue
         postings.append({"posting_id": posting_id, "source_url": urls[posting_id], **posting})
     return postings
+
+
+#: Link texts in an employer-first card that are neither employer, title nor
+#: place: a star rating, a salary estimate and its "(employer estimate)" note.
+_CARD_NOISE_RE = re.compile(
+    r"^(\d(?:[.,]\d)?\s*★|[()]|.*€.*|.*\$.*|estimation .*|.*estimate.*|schatting .*)$",
+    re.IGNORECASE,
+)
+
+
+def _read_employer_first(texts: list[str]) -> dict[str, Any] | None:
+    """Employer, title and place from a Glassdoor card, in that order.
+
+    The rating, the salary estimate and the "Easy apply" button sit in the same
+    link and are dropped; the salary is not kept because Glassdoor's ranges are
+    estimates (one alert read "52 k € - 1 M €").
+    """
+    words = [t for t in texts if t.lower() not in _BUTTON_TEXTS and not _CARD_NOISE_RE.match(t)]
+    if len(words) < 2:
+        return None
+    return {"title": words[1], "employer": words[0],
+            "location": words[2] if len(words) > 2 else None, "arrangement": None}
 
 
 #: "Similar jobs to <title> at <employer>" - the header naming the posting
@@ -433,9 +477,10 @@ def _ingest_imap(totals: dict[str, Any]) -> None:
     user, password = settings.alerts_imap_user.strip(), settings.alerts_imap_password
     if not user or not password:
         return
-    seeker = seekers_repo.get_seeker_by_email(user)
+    owner = settings.alerts_imap_owner.strip() or user
+    seeker = seekers_repo.get_seeker_by_email(owner)
     if seeker is None:
-        log.warning("Job alerts: no account logs in as %s; the IMAP mailbox is skipped", user)
+        log.warning("Job alerts: no account logs in as %s; the IMAP mailbox is skipped", owner)
         totals["errors"] += 1
         return
     totals["mailboxes"] += 1

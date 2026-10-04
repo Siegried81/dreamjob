@@ -219,7 +219,8 @@ def test_the_imap_search_names_every_alert_sender_and_a_day(monkeypatch) -> None
     assert imap.logged_in == ("me@yahoo.fr", "app-pw")
     assert imap.selected == ("INBOX", True)        # read-only
     assert imap.searches[0][1:] == (
-        "OR", "FROM", '"linkedin.com"', "FROM", '"ictjob.be"', "SINCE", "04-Oct-2026",
+        "OR", "FROM", '"linkedin.com"', "OR", "FROM", '"ictjob.be"', "FROM", '"glassdoor.com"',
+        "SINCE", "04-Oct-2026",
     )
     assert imap.closed
 
@@ -230,6 +231,7 @@ def test_a_yahoo_mailbox_feeds_the_account_that_logs_in_with_it(monkeypatch) -> 
     campaign = seed_campaign("alerts-yahoo@example.test")
     monkeypatch.setattr(job_alerts, "get_settings", lambda: get_settings().model_copy(update={
         "alerts_imap_user": "alerts-yahoo@example.test", "alerts_imap_password": "app-pw",
+        "alerts_imap_owner": "",
     }))
     # Own postings: the scratch database is shared, and a posting another test
     # already stored (same id, or same title at the same employer) would merge
@@ -260,6 +262,7 @@ def test_an_imap_user_with_no_account_is_reported(monkeypatch) -> None:
 
     monkeypatch.setattr(job_alerts, "get_settings", lambda: get_settings().model_copy(update={
         "alerts_imap_user": "nobody@yahoo.fr", "alerts_imap_password": "app-pw",
+        "alerts_imap_owner": "",
     }))
     monkeypatch.setattr(job_alerts.dispatch_repo, "accounts_to_poll", lambda _b: [])
 
@@ -299,3 +302,64 @@ def test_the_current_linkedin_layout_reads_employer_place_and_arrangement() -> N
     ]
     records = job_alerts.to_records(postings, job_alerts.ALERT_SOURCES[0], "2026-10-04T09:00:00+00:00")
     assert [r.data["work_arrangement"] for r in records] == [None, "hybrid", "onsite", None]
+
+
+# Glassdoor's layout (checked on a delivered alert): employer, star rating,
+# title, place, then an optional salary estimate - all inside one link per
+# posting whose query carries a stable jobListingId among tracking parameters.
+GLASSDOOR_HTML = """
+<html><body>
+<a href="https://fr.glassdoor.be/Emploi/bruxelles-emplois-SRCH_IL.0,9.htm?x=1">recherchez plus</a>
+<a href="https://fr.glassdoor.be/partner/jobListing.htm?pos=101&guid=abc&jobListingId=1010000000001&utm_source=x">
+  <span>Initech</span><span>3.6 ★</span><span>Data Analyst</span><span>Bruxelles</span>
+  <span>Candidature facile</span></a>
+<a href="https://fr.glassdoor.be/partner/jobListing.htm?pos=102&jobListingId=1010000000002&cpc=Z">
+  <span>Globex</span><span>5.0 ★</span><span>AI Engineer</span><span>Gand</span>
+  <span>52 k € - 1 M €</span><span>(</span><span>Estimation de l'employeur</span><span>)</span></a>
+<a href="https://fr.glassdoor.be/profile/unsubscribeEmail.htm?key=k">Se désabonner</a>
+</body></html>
+"""
+
+
+def test_a_glassdoor_alert_reads_employer_first_cards() -> None:
+    source = job_alerts.source_for("noreply@glassdoor.com")
+    message = _parsed(_message("Glassdoor <noreply@glassdoor.com>", GLASSDOOR_HTML))
+
+    postings = job_alerts.parse_alert(message, source)
+
+    assert source.key == "alert.glassdoor"
+    assert [(p["title"], p["employer"], p["location"]) for p in postings] == [
+        ("Data Analyst", "Initech", "Bruxelles"),
+        ("AI Engineer", "Globex", "Gand"),
+    ]
+    # Only the stable id survives; tracking parameters are dropped.
+    assert postings[0]["source_url"] == (
+        "https://fr.glassdoor.be/partner/jobListing.htm?jobListingId=1010000000001"
+    )
+
+
+def test_the_owner_setting_sends_a_mailbox_to_another_account(monkeypatch) -> None:
+    from dreamjob.config import get_settings
+
+    campaign = seed_campaign("alerts-owner@example.test")
+    monkeypatch.setattr(job_alerts, "get_settings", lambda: get_settings().model_copy(update={
+        "alerts_imap_user": "someone@yahoo.fr", "alerts_imap_password": "app-pw",
+        "alerts_imap_owner": "alerts-owner@example.test",
+    }))
+    html = (LINKEDIN_HTML.replace("3901234567", "4901234567").replace("3907654321", "4907654321")
+            .replace("Senior Data Engineer", "Data Platform Lead").replace("Northwind", "Vandelay")
+            .replace("Analytics Engineer", "Insights Analyst").replace("Contoso", "Pendant"))
+    message = _message("LinkedIn <jobalerts-noreply@linkedin.com>", html)
+
+    class LoadedImap(FakeImap):
+        def __init__(self, host: str, port: int) -> None:
+            super().__init__(host, port)
+            self.messages = {b"1": bytes(message)}
+
+    monkeypatch.setattr(job_alerts.imaplib, "IMAP4_SSL", LoadedImap)
+    monkeypatch.setattr(job_alerts.dispatch_repo, "accounts_to_poll", lambda _b: [])
+
+    totals = job_alerts.ingest_all()
+
+    assert totals["errors"] == 0 and totals["new_vacancies"] == 2
+    assert len(repo.list_notifications(campaign["seeker_id"], kind="new_vacancy")) == 2

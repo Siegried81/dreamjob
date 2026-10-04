@@ -147,6 +147,9 @@ class Settings(BaseSettings):
     alerts_imap_host: str = Field("imap.mail.yahoo.com", alias="DREAMJOB_ALERTS_IMAP_HOST")
     alerts_imap_user: str = Field("", alias="DREAMJOB_ALERTS_IMAP_USER")
     alerts_imap_password: str = Field("", alias="DREAMJOB_ALERTS_IMAP_PASSWORD")
+    # The account the mailbox's alerts belong to, when its login e-mail is not
+    # the mailbox address.  Empty = the account that logs in as alerts_imap_user.
+    alerts_imap_owner: str = Field("", alias="DREAMJOB_ALERTS_IMAP_OWNER")
     job_io_threads: int = Field(8, alias="DREAMJOB_JOB_IO_THREADS")
     # How long a writer waits for the single writer (CR-408) before giving up.
     # A request is impatient because a person is waiting and an error beats a
