@@ -6,8 +6,10 @@ those e-mails in the seeker's own inbox is ordinary use of a service the seeker
 subscribed to, so this module is the lawful route to those two sources:
 
 *It never visits linkedin.com or ictjob.be.*  It reads messages already
-delivered to a mailbox the seeker connected (``gmail.readonly``, the scope the
-mail slice already requests), extracts each posting's title, employer, location
+delivered to a mailbox the seeker connected - Gmail with ``gmail.readonly``,
+the scope the mail slice already requests, or another provider such as Yahoo
+over read-only IMAP with an app password (:class:`ImapAlertMailbox`) - and
+extracts each posting's title, employer, location
 and link from the alert's own HTML, and stores the link as ``source_url`` for
 the seeker to open by hand.
 
@@ -34,21 +36,28 @@ from __future__ import annotations
 
 import email
 import email.policy
+import imaplib
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 from html.parser import HTMLParser
 from typing import Any
 
 from dreamjob.adapters.base import NormalisedRecord
-from dreamjob.adapters.vacancy_source import application_route, country_from_location
+from dreamjob.adapters.vacancy_source import (
+    application_route,
+    country_from_location,
+    normalise_work_arrangement,
+)
+from dreamjob.config import get_settings
 from dreamjob.db.connection import utcnow
 from dreamjob.db.repositories import admin as admin_repo
 from dreamjob.db.repositories import campaigns as campaign_repo
 from dreamjob.db.repositories import dispatch as dispatch_repo
 from dreamjob.db.repositories import knowledge as kb_repo
+from dreamjob.db.repositories import seekers as seekers_repo
 from dreamjob.mail.inbox import _first_address, _received_at
 from dreamjob.monitoring import watchlist
 from dreamjob.pipeline import knowledge_base
@@ -194,8 +203,8 @@ def parse_alert(message: EmailMessage, source: AlertSource) -> list[dict[str, An
     pieces = parser.pieces
 
     order: list[str] = []
-    titles: dict[str, tuple[str, int]] = {}
     urls: dict[str, str] = {}
+    linked: dict[str, list[tuple[str, int]]] = {}
     for index, (text, href) in enumerate(pieces):
         match = source.link_re.search(href or "")
         if not match:
@@ -204,26 +213,71 @@ def parse_alert(message: EmailMessage, source: AlertSource) -> list[dict[str, An
         if posting_id not in urls:
             order.append(posting_id)
             urls[posting_id] = _posting_url(source, href or "", posting_id)
-        current = titles.get(posting_id, ("", -1))[0]
-        if text.lower() not in _BUTTON_TEXTS and len(text) > len(current):
-            titles[posting_id] = (text, index)
+        linked.setdefault(posting_id, []).append((text, index))
 
     postings: list[dict[str, Any]] = []
     for posting_id in order:
-        if posting_id not in titles:
+        posting = _read_posting(linked[posting_id], pieces)
+        if posting is None:
             continue
-        title, title_index = titles[posting_id]
-        following: list[str] = []
-        for text, href in pieces[title_index + 1:title_index + 4]:
-            if href:
-                break
-            following.append(text)
-        employer, place = _employer_and_place(following)
-        postings.append(
-            {"posting_id": posting_id, "title": title, "employer": employer,
-             "location": place, "source_url": urls[posting_id]}
-        )
+        postings.append({"posting_id": posting_id, "source_url": urls[posting_id], **posting})
     return postings
+
+
+#: "Similar jobs to <title> at <employer>" - the header naming the posting
+#: the seeker viewed.  The lead-in and the joining word are not the title.
+_LEAD_IN_RE = re.compile(
+    r"(similaires? à|similar to|vergelijkbaar met|ähnliche jobs wie)\s*$", re.IGNORECASE
+)
+_AT_WORDS = {"chez", "at", "bij", "bei"}
+#: "Brussels (Hybrid)" - the work arrangement LinkedIn appends to the place.
+_ARRANGEMENT_RE = re.compile(r"^(?P<place>.*?)\s*\((?P<mode>[^()]+)\)\s*$")
+
+
+def _read_posting(
+    texts: list[tuple[str, int]], pieces: list[tuple[str, str | None]]
+) -> dict[str, Any] | None:
+    """Title, employer, place and arrangement of one posting from its link texts.
+
+    Three layouts, in the order they are recognised:
+
+    * the title and an "Employer · Place" line both inside the posting link
+      (LinkedIn's current alert);
+    * "<lead-in> <title> chez|at <employer>" inside the link (the header that
+      names the posting the seeker viewed);
+    * only the title inside the link, with "Employer · Place" as plain text
+      after it, up to the next link.
+    """
+    words = [t for t, _ in texts if t.lower() not in _BUTTON_TEXTS and not _LEAD_IN_RE.search(t)]
+    employer = place = None
+    title = None
+    dotted = next((t for t in words if re.search(r"\s[·•]\s", t)), None)
+    at_index = next((i for i, t in enumerate(words) if t.lower() in _AT_WORDS), None)
+    if dotted is not None:
+        employer, place = _employer_and_place([dotted])
+        title = next((t for t in words if t != dotted and t.lower() not in _AT_WORDS), None)
+    elif at_index is not None:
+        title = words[at_index - 1] if at_index > 0 else None
+        employer = words[at_index + 1] if at_index + 1 < len(words) else None
+    else:
+        candidates = [(t, i) for t, i in texts if t in words]
+        if candidates:
+            title, title_index = max(candidates, key=lambda c: len(c[0]))
+            following: list[str] = []
+            for text, href in pieces[title_index + 1:title_index + 4]:
+                if href:
+                    break
+                following.append(text)
+            employer, place = _employer_and_place(following)
+    if not title:
+        return None
+
+    arrangement = None
+    match = _ARRANGEMENT_RE.match(place or "")
+    if match:
+        place, arrangement = match.group("place") or None, match.group("mode")
+    return {"title": title, "employer": employer, "location": place,
+            "arrangement": arrangement}
 
 
 def to_records(
@@ -245,6 +299,7 @@ def to_records(
                     ) + f" (from a {source.label} e-mail)",
                     "location": posting.get("location"),
                     "country": country_from_location(posting.get("location") or "", ""),
+                    "work_arrangement": normalise_work_arrangement(posting.get("arrangement")),
                     "posted_at": received_at or None,
                     "application_channel": channel,
                     "application_target": target,
@@ -281,8 +336,11 @@ def ingest_account(account: dict, *, backend: Any = None) -> dict[str, Any]:
     mailbox = backend or GmailBackend(account)
     cursor_key = f"{SETTING_CURSOR_PREFIX}{account['id']}"
     started = utcnow()
-    ids = mailbox.list_message_ids(_gmail_query(admin_repo.get_setting(cursor_key)),
-                                   max_results=MAX_MESSAGES)
+    cursor = admin_repo.get_setting(cursor_key)
+    if hasattr(mailbox, "alert_ids"):
+        ids = mailbox.alert_ids(cursor, MAX_MESSAGES)
+    else:
+        ids = mailbox.list_message_ids(_gmail_query(cursor), max_results=MAX_MESSAGES)
 
     report = {"account_id": account["id"], "alerts": 0, "alerts_without_postings": 0,
               "postings": 0, "new_vacancies": 0, "opportunities_added": 0, "notifications": 0}
@@ -318,8 +376,78 @@ def ingest_account(account: dict, *, backend: Any = None) -> dict[str, Any]:
     return report
 
 
+class ImapAlertMailbox:
+    """A non-Gmail mailbox (Yahoo) read over IMAP with an app password.
+
+    It offers the two calls :func:`ingest_account` needs - ``alert_ids`` in
+    place of a Gmail search, and ``fetch_raw`` - so the parsing, the writer and
+    the notifications are the same code as for Gmail.  IMAP ``SINCE`` has day
+    precision, so a pass re-reads the cursor's whole day; that is harmless
+    because a re-read alert only merges.  The mailbox is opened read-only.
+    """
+
+    def __init__(self, host: str, user: str, password: str, *, port: int = 993):
+        self.host, self.user, self.password, self.port = host, user, password, port
+        self._client: imaplib.IMAP4_SSL | None = None
+
+    def __enter__(self) -> ImapAlertMailbox:
+        self._client = imaplib.IMAP4_SSL(self.host, self.port)
+        self._client.login(self.user, self.password)
+        self._client.select("INBOX", readonly=True)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self._client is not None:
+            try:
+                self._client.logout()
+            except Exception:  # noqa: BLE001 - closing must not mask the pass result
+                log.debug("IMAP logout failed", exc_info=True)
+            self._client = None
+
+    def alert_ids(self, cursor: str | None, limit: int) -> list[bytes]:
+        """UIDs of alert-sender messages since the cursor's day (or the first window)."""
+        assert self._client is not None, "use ImapAlertMailbox as a context manager"
+        since = datetime.fromisoformat(cursor) if cursor else datetime.now() - timedelta(days=14)
+        criteria = ["SINCE", since.strftime("%d-%b-%Y")]
+        senders = [s.sender_domain for s in ALERT_SOURCES]
+        # IMAP OR takes two keys: fold "FROM a OR FROM b ..." into nested ORs.
+        query: list[str] = ["FROM", f'"{senders[-1]}"']
+        for domain in reversed(senders[:-1]):
+            query = ["OR", "FROM", f'"{domain}"', *query]
+        typ, data = self._client.uid("SEARCH", None, *query, *criteria)
+        if typ != "OK":
+            raise RuntimeError(f"IMAP search failed: {typ}")
+        return (data[0] or b"").split()[-limit:]
+
+    def fetch_raw(self, uid: bytes) -> bytes:
+        assert self._client is not None, "use ImapAlertMailbox as a context manager"
+        typ, payload = self._client.uid("FETCH", uid, "(RFC822)")
+        if typ != "OK" or not payload or not isinstance(payload[0], tuple):
+            raise RuntimeError(f"IMAP fetch of {uid!r} failed: {typ}")
+        return payload[0][1]
+
+
+def _ingest_imap(totals: dict[str, Any]) -> None:
+    """The configured IMAP mailbox, if any, for the account that owns it."""
+    settings = get_settings()
+    user, password = settings.alerts_imap_user.strip(), settings.alerts_imap_password
+    if not user or not password:
+        return
+    seeker = seekers_repo.get_seeker_by_email(user)
+    if seeker is None:
+        log.warning("Job alerts: no account logs in as %s; the IMAP mailbox is skipped", user)
+        totals["errors"] += 1
+        return
+    totals["mailboxes"] += 1
+    with ImapAlertMailbox(settings.alerts_imap_host, user, password) as mailbox:
+        result = ingest_account({"id": f"imap:{user}", "job_seeker_id": seeker["id"]},
+                                backend=mailbox)
+    for key in ("alerts", "new_vacancies", "opportunities_added", "notifications"):
+        totals[key] += int(result.get(key) or 0)
+
+
 def ingest_all() -> dict[str, Any]:
-    """Every connected Gmail mailbox; one failing mailbox never stops the others."""
+    """Every connected mailbox; one failing mailbox never stops the others."""
     totals: dict[str, Any] = {"mailboxes": 0, "errors": 0, "alerts": 0, "new_vacancies": 0,
                               "opportunities_added": 0, "notifications": 0}
     for account in dispatch_repo.accounts_to_poll("gmail_oauth"):
@@ -332,4 +460,9 @@ def ingest_all() -> dict[str, Any]:
             continue
         for key in ("alerts", "new_vacancies", "opportunities_added", "notifications"):
             totals[key] += int(result.get(key) or 0)
+    try:
+        _ingest_imap(totals)
+    except Exception:  # noqa: BLE001 - a failing mailbox is counted, not raised
+        log.exception("Job-alert pass failed for the IMAP mailbox")
+        totals["errors"] += 1
     return totals

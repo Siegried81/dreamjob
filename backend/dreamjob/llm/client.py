@@ -513,6 +513,28 @@ class LLMClient:
             cfg.get("provider") or s.llm_provider,
         )
 
+    def _fallback_endpoint(
+        self, base_url: str, model: str
+    ) -> tuple[str, list[str], str, str] | None:
+        """The ``(base_url, keys, model, provider)`` to try when the main endpoint fails.
+
+        ``None`` without a fallback key, or when the call is already going to
+        that endpoint.  The fallback model mirrors the main choice: the strong
+        one for a call routed to the strong model, the cheap one otherwise.
+        """
+        s = self.settings
+        key = (s.fallback_llm_api_key or "").strip()
+        fallback_url = (s.fallback_llm_base_url or "").strip()
+        if not key or not fallback_url or fallback_url.rstrip("/") == base_url.rstrip("/"):
+            return None
+        strong = model == s.llm_model_strong
+        return (
+            fallback_url,
+            [key],
+            s.fallback_llm_model_strong if strong else s.fallback_llm_model_cheap,
+            "fallback",
+        )
+
     def _price(self, input_tokens: int, output_tokens: int) -> float:
         s = self.settings
         cfg = admin_config()
@@ -589,34 +611,65 @@ class LLMClient:
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
+        # A rate-limited key is not a reason to wait while another key is idle:
+        # on a 429 the next configured key is tried at once, and the backoff
+        # below only applies once every key has answered 429.  Only the main
+        # endpoint's own key rotates; a local model or a routed override keeps
+        # the single key it was given.
+        keys = (
+            self.settings.deepseek_api_keys or [api_key]
+            if api_key == self.settings.deepseek_api_key
+            else [api_key]
+        )
+        # When the main endpoint still fails after its keys and retries, one
+        # optional fallback endpoint (DREAMJOB_FALLBACK_LLM_*) gets the same
+        # call.  It is tried last on purpose: the main endpoint is the free one,
+        # and the fallback is paid for only on the calls the main one dropped.
+        endpoints = [(base_url, keys, model, provider)]
+        fallback = self._fallback_endpoint(base_url, model)
+        if fallback is not None:
+            endpoints.append(fallback)
         last_error: Exception | None = None
-        for attempt in range(retries + 1):
-            try:
-                with httpx.Client(timeout=self.timeout) as client:
-                    resp = client.post(
-                        f"{base_url.rstrip('/')}/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {api_key}",
-                            "Content-Type": "application/json",
-                        },
-                        json=payload,
-                    )
-                if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
+        data: dict[str, Any] | None = None
+        # The loop variables outlive the loop on purpose: model and provider name
+        # the endpoint that answered, for the cost and the FR-364 call log.
+        for base_url, keys, model, provider in endpoints:  # noqa: B007
+            payload["model"] = model
+            for attempt in range(retries + 1):
+                try:
+                    with httpx.Client(timeout=self.timeout) as client:
+                        for key in keys:
+                            resp = client.post(
+                                f"{base_url.rstrip('/')}/chat/completions",
+                                headers={
+                                    "Authorization": f"Bearer {key}",
+                                    "Content-Type": "application/json",
+                                },
+                                json=payload,
+                            )
+                            if resp.status_code != 429:
+                                break
+                    if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
+                        time.sleep(2 ** attempt * 2)
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    break
+                except Exception as exc:  # noqa: BLE001 - retried, then surfaced
+                    last_error = exc
+                    if attempt >= retries:
+                        break
                     time.sleep(2 ** attempt * 2)
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
+            if data is not None:
                 break
-            except Exception as exc:  # noqa: BLE001 - retried, then surfaced
-                last_error = exc
-                if attempt >= retries:
-                    self._log_call(
-                        task, system, user, "", model, provider, Usage(), entity_type, entity_id,
-                        prompt_template, prompt_version, int((time.monotonic() - started) * 1000),
-                        status="error", error=str(exc),
-                    )
-                    raise LLMError(f"LLM call failed for task {task!r}: {exc}") from last_error
-                time.sleep(2 ** attempt * 2)
+            log.warning("LLM endpoint %s failed for task %r: %s", base_url, task, last_error)
+        if data is None:
+            self._log_call(
+                task, system, user, "", model, provider, Usage(), entity_type, entity_id,
+                prompt_template, prompt_version, int((time.monotonic() - started) * 1000),
+                status="error", error=str(last_error),
+            )
+            raise LLMError(f"LLM call failed for task {task!r}: {last_error}") from last_error
 
         choice = data["choices"][0]
         text = (choice["message"].get("content") or "").strip()

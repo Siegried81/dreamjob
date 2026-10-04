@@ -40,6 +40,25 @@ class Settings(BaseSettings):
     # --- LLM (CR-409) ------------------------------------------------------
     llm_provider: str = Field("deepseek", alias="DREAMJOB_LLM_PROVIDER")
     deepseek_api_key: str = Field("", alias="DEEPSEEK_API_KEY")
+    # Extra keys for the same OpenAI-compatible endpoint.  A free tier (Groq)
+    # rate-limits each key per minute, so the client moves to the next key on
+    # a 429 instead of sleeping; see ``deepseek_api_keys``.
+    deepseek_api_key_2: str = Field("", alias="DEEPSEEK_API_KEY_2")
+    deepseek_api_key_3: str = Field("", alias="DEEPSEEK_API_KEY_3")
+    deepseek_api_key_4: str = Field("", alias="DEEPSEEK_API_KEY_4")
+    deepseek_api_key_5: str = Field("", alias="DEEPSEEK_API_KEY_5")
+    # A second OpenAI-compatible endpoint tried only when the main one still
+    # fails after all its keys and retries (e.g. Groq first, DeepSeek behind
+    # it).  No key = no fallback.  deepseek-chat for both roles by default: it
+    # is the cheaper model, and the fallback exists to keep a call alive.
+    fallback_llm_base_url: str = Field(
+        "https://api.deepseek.com", alias="DREAMJOB_FALLBACK_LLM_BASE_URL"
+    )
+    fallback_llm_api_key: str = Field("", alias="DREAMJOB_FALLBACK_LLM_API_KEY")
+    fallback_llm_model_cheap: str = Field("deepseek-chat", alias="DREAMJOB_FALLBACK_LLM_MODEL_CHEAP")
+    fallback_llm_model_strong: str = Field(
+        "deepseek-chat", alias="DREAMJOB_FALLBACK_LLM_MODEL_STRONG"
+    )
     deepseek_base_url: str = Field("https://api.deepseek.com", alias="DEEPSEEK_BASE_URL")
     llm_model_cheap: str = Field("deepseek-chat", alias="DREAMJOB_LLM_MODEL_CHEAP")
     llm_model_strong: str = Field("deepseek-reasoner", alias="DREAMJOB_LLM_MODEL_STRONG")
@@ -122,6 +141,12 @@ class Settings(BaseSettings):
     # How often connected Gmail mailboxes are read for LinkedIn / ictjob.be
     # job-alert e-mails (mail/job_alerts.py); 0 turns it off.
     job_alerts_seconds: int = Field(900, alias="DREAMJOB_JOB_ALERTS_SECONDS")
+    # A non-Gmail mailbox read for job alerts over IMAP with an app password
+    # (Yahoo: Account security -> Generate app password).  The alerts go to the
+    # account whose login e-mail is ``alerts_imap_user``.  Empty = off.
+    alerts_imap_host: str = Field("imap.mail.yahoo.com", alias="DREAMJOB_ALERTS_IMAP_HOST")
+    alerts_imap_user: str = Field("", alias="DREAMJOB_ALERTS_IMAP_USER")
+    alerts_imap_password: str = Field("", alias="DREAMJOB_ALERTS_IMAP_PASSWORD")
     job_io_threads: int = Field(8, alias="DREAMJOB_JOB_IO_THREADS")
     # How long a writer waits for the single writer (CR-408) before giving up.
     # A request is impatient because a person is waiting and an error beats a
@@ -189,6 +214,17 @@ class Settings(BaseSettings):
         return v
 
     # --- Derived helpers ---------------------------------------------------
+    @property
+    def deepseek_api_keys(self) -> list[str]:
+        """Every configured key for the main LLM endpoint, in order, without repeats."""
+        keys: list[str] = []
+        for key in (self.deepseek_api_key, self.deepseek_api_key_2, self.deepseek_api_key_3,
+                    self.deepseek_api_key_4, self.deepseek_api_key_5):
+            key = (key or "").strip()
+            if key and key not in keys:
+                keys.append(key)
+        return keys
+
     @property
     def abs_data_dir(self) -> Path:
         p = self.data_dir
