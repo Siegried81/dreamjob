@@ -77,6 +77,8 @@ JOB_BOARD_HOSTS: tuple[str, ...] = (
     "interimjobs.be", "randstad.be", "adecco.be", "manpower.be",
     "jobsinbrussels.be", "eurojobs.com", "eures.europa.eu", "talent.com",
     "jobrapido.com", "careerjet.be", "jooble.org", "xing.com", "yourtalent.be",
+    "remotive.com", "remoteok.com", "jobicy.com", "himalayas.app", "adzuna.com",
+    "adzuna.be", "adzuna.nl", "adzuna.fr", "adzuna.de", "adzuna.co.uk", "ycombinator.com",
 )
 
 

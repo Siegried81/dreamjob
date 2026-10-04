@@ -242,6 +242,22 @@ DREAMJOB_EMBEDDINGS_BASE_URL=...
 python3 scripts/build_semantic_index.py
 ```
 
+**Near-real-time vacancies** — on by default. The scheduler's `vacancy_refresh`
+task runs every 10 minutes (`DREAMJOB_VACANCY_REFRESH_SECONDS`): it re-reads a
+bounded, round-robin slice of the ATS boards behind existing ranked lists, and
+each new posting is added to every following campaign under its directives,
+scored, and announced once as a `new_vacancy` notification. Vacancy fetches
+treat a cached board as fresh for one hour (`DREAMJOB_VACANCY_CACHE_TTL_SECONDS`);
+after that it is revalidated, which costs a 0-byte 304 when nothing changed.
+
+To discover beyond the boards already followed, turn on the continuous cycle in
+**Admin → Continuous** with a 300 s interval. The UI receives updates live
+through `/api/events/stream`.
+
+The scheduler runs inside the API process and stops with it. On Windows, if it
+must survive API restarts, set `DREAMJOB_SCHEDULER_ENABLED=0` and run
+`python -m dreamjob.monitoring.scheduler --once` from Task Scheduler instead.
+
 ---
 
 ## Using it
@@ -278,9 +294,9 @@ can show what is in force. Groups include:
 - **Keys** — `DREAMJOB_MASTER_KEY`, `DREAMJOB_SESSION_SECRET`
 - **LLM** — `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, cheap/strong model names, `DREAMJOB_LOCAL_LLM_*`, `DREAMJOB_EMBEDDINGS_*`, budget and cost
 - **Mail** — `DREAMJOB_MAIL_BACKEND`, `DREAMJOB_MAIL_DRY_RUN`, `GMAIL_*`, `RESEND_API_KEY`, `DREAMJOB_SEND_DAILY_CAP`, send window and interval
-- **Egress** — user agent, per-domain RPS, concurrency, cache and negative-cache TTL, robots and crawl-delay flags, raw-document retention
+- **Egress** — user agent, per-domain RPS, concurrency, cache and negative-cache TTL, `DREAMJOB_VACANCY_CACHE_TTL_SECONDS` (freshness window for vacancy fetches), robots and crawl-delay flags, raw-document retention
 - **Browser** — `DREAMJOB_CDP_URL`, profile directory, human pacing bounds
-- **Scheduler** — `DREAMJOB_SCHEDULER_ENABLED`, `DREAMJOB_SCHEDULER_TICK_SECONDS`
+- **Scheduler** — `DREAMJOB_SCHEDULER_ENABLED`, `DREAMJOB_SCHEDULER_TICK_SECONDS`, `DREAMJOB_VACANCY_REFRESH_SECONDS` (0 turns the vacancy refresh off)
 - **Observability** — log directory, level, format, rotation, slow-request and slow-query thresholds
 
 ---

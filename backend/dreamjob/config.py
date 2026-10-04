@@ -96,6 +96,11 @@ class Settings(BaseSettings):
         alias="DREAMJOB_USER_AGENT",
     )
     http_cache_ttl_seconds: int = Field(86_400, alias="DREAMJOB_HTTP_CACHE_TTL_SECONDS")
+    # Vacancy sources (ATS boards, job boards) change within the hour while
+    # registries and filings change yearly, so one TTL for both either serves
+    # day-old postings or re-reads accounts for nothing.  Vacancy fetches pass
+    # this as ``max_age``; an unchanged board revalidates as a 304.
+    vacancy_cache_ttl_seconds: int = Field(3_600, alias="DREAMJOB_VACANCY_CACHE_TTL_SECONDS")
     per_domain_rps: float = Field(0.5, alias="DREAMJOB_PER_DOMAIN_RPS")
     http_max_concurrency: int = Field(20, alias="DREAMJOB_HTTP_MAX_CONCURRENCY")
     # NFR-102: how many background jobs may hold a worker thread at once, and
@@ -111,6 +116,12 @@ class Settings(BaseSettings):
     # default and can be turned off for an external `--once` cron, or in tests.
     scheduler_enabled: bool = Field(True, alias="DREAMJOB_SCHEDULER_ENABLED")
     scheduler_tick_seconds: int = Field(60, alias="DREAMJOB_SCHEDULER_TICK_SECONDS")
+    # How often the scheduler re-reads the ATS boards of companies already in
+    # someone's ranked list (pipeline/vacancy_refresh.py); 0 turns it off.
+    vacancy_refresh_seconds: int = Field(600, alias="DREAMJOB_VACANCY_REFRESH_SECONDS")
+    # How often connected Gmail mailboxes are read for LinkedIn / ictjob.be
+    # job-alert e-mails (mail/job_alerts.py); 0 turns it off.
+    job_alerts_seconds: int = Field(900, alias="DREAMJOB_JOB_ALERTS_SECONDS")
     job_io_threads: int = Field(8, alias="DREAMJOB_JOB_IO_THREADS")
     # How long a writer waits for the single writer (CR-408) before giving up.
     # A request is impatient because a person is waiting and an error beats a
@@ -134,6 +145,12 @@ class Settings(BaseSettings):
     # robots.txt says how fast as well as whether (FR-182): europa.eu asks for
     # 10 s, api.lever.co for 1 s.  Off is for tests that must not sleep.
     honour_crawl_delay: bool = Field(True, alias="DREAMJOB_HONOUR_CRAWL_DELAY")
+    # Adzuna's job-search API is free but keyed (developer.adzuna.com).  With
+    # either value empty, board.adzuna stays catalogued but inert: the planner
+    # leaves it out with the reason, as it does a registry without its key
+    # (FR-245).  The pair is sent as query parameters, never in the stored URL.
+    adzuna_app_id: str = Field("", alias="DREAMJOB_ADZUNA_APP_ID")
+    adzuna_app_key: str = Field("", alias="DREAMJOB_ADZUNA_APP_KEY")
 
     # --- Browser automation (FR-201..208) ----------------------------------
     cdp_url: str = Field("http://127.0.0.1:9222", alias="DREAMJOB_CDP_URL")

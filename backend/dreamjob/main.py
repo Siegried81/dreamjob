@@ -43,6 +43,7 @@ ROUTERS: list[tuple[str, str, str]] = [
     ("mail",         "/api/mail",         "Mail"),                  # FR-325..327
     ("pipeline",     "/api/pipeline",     "Post-application"),      # FR-421..425
     ("monitoring",   "/api/monitoring",   "Monitoring"),            # FR-401..403
+    ("events", "/api/events", "Live events"),
     ("intelligence", "/api/intelligence", "Dream-job intelligence"),# FR-381..385, FR-441..444
     ("networking",   "/api/networking",   "Networking & export"),   # FR-461..463
     ("admin",        "/api/admin",        "Administration"),        # FR-361..364

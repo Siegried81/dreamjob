@@ -218,6 +218,10 @@ AGGREGATOR_DOMAINS = frozenset(
         "example.com", "example.org", "esempio.com", "domain.com", "email.com",
         "sentry.io", "wixpress.com", "wikipedia.org", "team.blue", "feather-insurance.com",
         "businesswire.com", "website-files.com",
+        # The public JSON job feeds: their posting URLs are the attribution the
+        # feeds' terms require, never the employer's site.
+        "remotive.com", "remoteok.com", "jobicy.com", "himalayas.app", "adzuna.com",
+        "adzuna.be", "adzuna.nl", "adzuna.fr", "adzuna.de", "adzuna.co.uk", "ycombinator.com",
     }
 )
 

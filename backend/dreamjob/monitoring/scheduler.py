@@ -5,6 +5,12 @@ Five recurring pieces of work, none of which belongs to a request:
 ============================  ==========  ==================================
 task                          default     what it does
 ============================  ==========  ==================================
+``vacancy_refresh``           10 minutes  re-reads the ATS boards behind the
+                                          ranked lists and adds new postings
+                                          (``DREAMJOB_VACANCY_REFRESH_SECONDS``)
+``job_alerts``                15 minutes  reads LinkedIn / ictjob.be alert
+                                          e-mails in connected mailboxes
+                                          (``DREAMJOB_JOB_ALERTS_SECONDS``)
 ``watchlist``                 hourly      runs the watches that are due
                                           (FR-401); each watch's own
                                           interval decides which those are
@@ -385,6 +391,52 @@ async def _run_continuous() -> dict[str, Any]:
     return await continuous.run_phase()
 
 
+def _vacancy_refresh_tick() -> dict[str, Any]:
+    """One bounded board refresh, on a worker thread in the bulk write lane.
+
+    The writes under it (vacancy rows, opportunities, scoring) are synchronous
+    database work, so like the enrichment sweep it must not run on the loop
+    that serves requests.
+    """
+    from dreamjob.pipeline import vacancy_refresh  # noqa: PLC0415 - avoids an import cycle
+
+    with write_lane(BULK):
+        try:
+            return asyncio.run(vacancy_refresh.refresh())
+        finally:
+            close_thread_connections()
+
+
+async def _run_vacancy_refresh() -> dict[str, Any]:
+    """Re-read the ATS boards behind the ranked lists (FR-401, FR-261).
+
+    It is not deferred while a collection runs: one pass is a couple of dozen
+    small JSON requests, and deferring it would stop the fast path for as long
+    as the continuous cycle keeps a collection going.
+    """
+    return await asyncio.to_thread(_vacancy_refresh_tick)
+
+
+def _job_alerts_tick() -> dict[str, Any]:
+    """One pass over the connected mailboxes' job-alert e-mails, off the serving loop."""
+    from dreamjob.mail import job_alerts  # noqa: PLC0415 - avoids an import cycle
+
+    with write_lane(BULK):
+        try:
+            return job_alerts.ingest_all()
+        finally:
+            close_thread_connections()
+
+
+async def _run_job_alerts() -> dict[str, Any]:
+    """Turn LinkedIn / ictjob.be alert e-mails into ranked opportunities (FR-261).
+
+    Gmail API calls and the writes under them are synchronous, so the pass runs
+    on a worker thread like the other sweeps.
+    """
+    return await asyncio.to_thread(_job_alerts_tick)
+
+
 async def _run_learning() -> dict[str, Any]:
     """Tell a seeker when outcome learning has enough evidence to apply (FR-425).
 
@@ -434,7 +486,18 @@ def _learning_sweep() -> dict[str, Any]:
 
 HOUR = 3600
 
+#: ``DREAMJOB_VACANCY_REFRESH_SECONDS``; 0 switches the task off.
+_VACANCY_REFRESH_SECONDS = get_settings().vacancy_refresh_seconds
+#: ``DREAMJOB_JOB_ALERTS_SECONDS``; 0 switches the task off.
+_JOB_ALERTS_SECONDS = get_settings().job_alerts_seconds
+
 DEFAULT_TASKS: list[Task] = [
+    Task("vacancy_refresh", max(60, _VACANCY_REFRESH_SECONDS), _run_vacancy_refresh,
+         "Re-read followed ATS boards and add new postings to the ranked lists",
+         enabled=_VACANCY_REFRESH_SECONDS > 0),
+    Task("job_alerts", max(60, _JOB_ALERTS_SECONDS), _run_job_alerts,
+         "Read LinkedIn / ictjob.be job-alert e-mails into the ranked lists",
+         enabled=_JOB_ALERTS_SECONDS > 0),
     Task("replies", 15 * 60, _run_replies,
          "Classify incoming replies and draft answers (FR-422)"),
     Task("watchlist", HOUR, _run_watchlist,

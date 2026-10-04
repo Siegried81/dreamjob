@@ -803,6 +803,29 @@ def vacancies_since(company_id: str, since: str | None, limit: int = 100) -> lis
     return query_all(sql, tuple(params))
 
 
+def ranked_ats_boards() -> list[dict]:
+    """Every ATS board behind someone's ranked list, with who follows it.
+
+    One row per ``(company, seeker, campaign)``: the vacancy refresh reads each
+    board once and hands its new postings to every campaign that already holds
+    an opportunity at that company.  Like :func:`watches_due` this crosses
+    seekers on purpose - it is the scheduler asking "what is followed?" - and
+    it returns only what the refresh needs, never another seeker's row content.
+    A cancelled campaign is left out: nobody is reading its list.
+    """
+    return query_all(
+        "SELECT DISTINCT o.company_id, o.job_seeker_id, o.campaign_id, "
+        "       c.name AS company_name, c.ats_vendor, c.ats_slug "
+        "FROM opportunity o "
+        "JOIN company c ON c.id = o.company_id "
+        "JOIN campaign k ON k.id = o.campaign_id "
+        "WHERE c.ats_vendor IS NOT NULL AND c.ats_vendor <> '' "
+        "  AND c.ats_slug IS NOT NULL AND c.ats_slug <> '' "
+        "  AND k.status <> 'cancelled' "
+        "ORDER BY o.company_id"
+    )
+
+
 def signals_since(company_id: str, since: str | None, limit: int = 100) -> list[dict]:
     sql = "SELECT * FROM hiring_signal WHERE company_id = ?"
     params: list[Any] = [company_id]
