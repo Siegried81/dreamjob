@@ -131,6 +131,28 @@ def test_a_unit_test_cannot_open_the_installed_database():
     assert get_settings().abs_db_path.resolve() != installed
 
 
+def test_no_unit_test_can_reach_a_model_with_a_real_key():
+    """The same rule for the other door: no LLM credential inside the suite.
+
+    ``conftest._the_model_is_out_of_reach`` blanked ``DEEPSEEK_API_KEY`` only,
+    while ``LLMClient.complete`` rotates over ``Settings.deepseek_api_keys`` -
+    which still held the four ``DEEPSEEK_API_KEY_2..5`` values from ``.env`` -
+    and then falls through to ``DREAMJOB_FALLBACK_LLM_API_KEY``, the paid
+    endpoint.  The pass gates read the single field, so they degraded as
+    intended, but any test that called ``complete()`` without stubbing
+    ``httpx`` spent real money on real keys.  Asserted on counts and booleans,
+    never on a value: a failing assertion must not print a credential.
+    """
+    settings = get_settings()
+
+    assert settings.deepseek_api_key == ""
+    assert len(settings.deepseek_api_keys) == 0, (
+        "the rotation list is what complete() iterates; one blanked field is not enough"
+    )
+    assert settings.fallback_llm_api_key == "", "the paid fallback must be unreachable too"
+    assert settings.local_llm_base_url == ""
+
+
 # ---------------------------------------------------------------------------
 # The guard: nothing is planned that nothing knows about
 # ---------------------------------------------------------------------------

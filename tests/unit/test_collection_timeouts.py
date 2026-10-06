@@ -37,7 +37,7 @@ from dreamjob.db.migrator import migrate
 from dreamjob.db.repositories import campaigns as campaign_repo
 from dreamjob.egress.client import EgressClient, FetchResult
 from dreamjob.jobs.runner import JobContext, JobControl, runner
-from dreamjob.pipeline import collection
+from dreamjob.pipeline import collection, email_validate
 
 
 @pytest.fixture()
@@ -53,7 +53,19 @@ def db(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def no_network(monkeypatch):
-    """Every fetch answers 200 with an empty body, without leaving the process."""
+    """Every fetch answers 200 with an empty body, without leaving the process.
+
+    ``EgressClient.fetch`` is not the only door out.  The passes that run after
+    collection resolve the employer of every record collected, and that path
+    reaches ``email_validate._resolve_mx`` - a real DNS query with a 5 s
+    lifetime for MX and another 5 s for the A fallback.  The single record the
+    fast board returns is enough: its company name becomes a guessed domain
+    nothing answers for, and the run spends ~10 s of wall clock outside the
+    event loop.  That is what made the bound tests below look like a collection
+    bound had failed, while the page bound in the very same run fired on time at
+    0.1 s.  DNS is stubbed here so these tests measure the bounds they are about
+    and make no network request.
+    """
 
     async def _fetch(self, url, **kwargs):
         return FetchResult(
@@ -62,6 +74,13 @@ def no_network(monkeypatch):
         )
 
     monkeypatch.setattr(EgressClient, "fetch", _fetch)
+    monkeypatch.setattr(
+        email_validate,
+        "_resolve_mx",
+        lambda domain, timeout=5.0: email_validate.MXResult(
+            has_mx=False, error="DNS is stubbed in tests"
+        ),
+    )
 
 
 def _seeker() -> str:
