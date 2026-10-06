@@ -51,3 +51,17 @@ logs/*
 # and capture*.py holds the login password. Never commit them.
 docs/v2_build/state.json
 docs/v2_build/capture*.py
+
+# Archives of the data directory. `/data/` is anchored on purpose (packaged
+# pipeline data under backend/ must stay tracked), but that left a zip OF that
+# directory matching nothing: data.zip was 1.4 GiB of the live database, dated
+# backups, uploads and generated CVs of real people, one `git add -A` from a
+# public commit. Found 2026-10-06.
+*.zip
+!backend/dreamjob/pipeline/data/*.zip
+# Session transcripts and scratch artefacts.
+claude_*.txt
+*transcript*.txt
+*.bak
+*.part
+*.orig

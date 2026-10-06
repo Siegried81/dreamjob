@@ -418,13 +418,25 @@ def test_a_plan_of_one_page_items_is_not_scaled_away():
     assert all(item.estimated_pages == 1 for item in planned)
 
 
-def test_a_deterministic_source_costs_no_tokens_and_one_second_of_overhead():
+def test_a_deterministic_source_costs_no_tokens_and_one_second_of_overhead(
+    monkeypatch, request
+):
     """C7: pricing a JSON board like an HTML page rejected a correct plan.
 
     7,500 boards at 8 s and 2,900 tokens per page displayed 16.7 hours and
     18.75 M tokens on the review screen, which tripped the budget check before
     the campaign could start.
     """
+    # The rates otherwise come from the developer's .env, where a free-tier
+    # endpoint legitimately sets them to 0 - and then the "an HTML page pays"
+    # assertion below is a statement about that machine's config, not the code.
+    # The finaliser, rather than a line at the end of the body: a failing assert
+    # would otherwise leave the patched rates cached in `get_settings` for every
+    # test that runs after this one.
+    monkeypatch.setenv("DREAMJOB_LLM_COST_PER_1M_INPUT_EUR", "0.25")
+    monkeypatch.setenv("DREAMJOB_LLM_COST_PER_1M_OUTPUT_EUR", "1.00")
+    get_settings.cache_clear()
+    request.addfinalizer(get_settings.cache_clear)
     board = {"adapter_key": "ats.greenhouse", "access_method": "api", "rate_limit_rps": 0.5}
     html = {"adapter_key": "board.somewhere", "access_method": "http", "rate_limit_rps": 0.5}
 

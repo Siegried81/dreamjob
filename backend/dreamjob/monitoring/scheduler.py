@@ -8,8 +8,11 @@ task                          default     what it does
 ``vacancy_refresh``           10 minutes  re-reads the ATS boards behind the
                                           ranked lists and adds new postings
                                           (``DREAMJOB_VACANCY_REFRESH_SECONDS``)
-``job_alerts``                15 minutes  reads LinkedIn / ictjob.be alert
-                                          e-mails in connected mailboxes
+``job_alerts``                15 minutes  reads the LinkedIn, ictjob.be,
+                                          Glassdoor and Jobat alert e-mails
+                                          in connected mailboxes; a Jobat
+                                          alert carries no posting link, so
+                                          its rows are leads to look up
                                           (``DREAMJOB_JOB_ALERTS_SECONDS``)
 ``watchlist``                 hourly      runs the watches that are due
                                           (FR-401); each watch's own
@@ -429,7 +432,11 @@ def _job_alerts_tick() -> dict[str, Any]:
 
 
 async def _run_job_alerts() -> dict[str, Any]:
-    """Turn LinkedIn / ictjob.be alert e-mails into ranked opportunities (FR-261).
+    """Turn job-alert e-mails into ranked opportunities (FR-261).
+
+    Senders are whatever mail/job_alerts.py ALERT_SOURCES declares -
+    LinkedIn, ictjob.be, Glassdoor and Jobat today. Jobat rows carry no URL
+    and are leads to look up, not links.
 
     Gmail API calls and the writes under them are synchronous, so the pass runs
     on a worker thread like the other sweeps.
@@ -496,7 +503,8 @@ DEFAULT_TASKS: list[Task] = [
          "Re-read followed ATS boards and add new postings to the ranked lists",
          enabled=_VACANCY_REFRESH_SECONDS > 0),
     Task("job_alerts", max(60, _JOB_ALERTS_SECONDS), _run_job_alerts,
-         "Read LinkedIn / ictjob.be job-alert e-mails into the ranked lists",
+         "Read LinkedIn, ictjob.be, Glassdoor and Jobat job-alert e-mails into "
+         "the ranked lists (Jobat's arrive as leads, with no posting link)",
          enabled=_JOB_ALERTS_SECONDS > 0),
     Task("replies", 15 * 60, _run_replies,
          "Classify incoming replies and draft answers (FR-422)"),

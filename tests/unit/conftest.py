@@ -65,6 +65,15 @@ def _the_model_is_out_of_reach() -> Iterator[None]:
     absent for the whole session and every pass that looks for a model
     degrades to its deterministic path.
 
+    *Every* credential that reaches a model, not only the first.  Blanking
+    ``DEEPSEEK_API_KEY`` alone left ``Settings.deepseek_api_keys`` holding the
+    four rotation keys from ``.env`` - and ``LLMClient.complete`` rotates over
+    that list, not over the single field - plus a live
+    ``DREAMJOB_FALLBACK_LLM_API_KEY`` pointing at the paid endpoint.  The pass
+    gates all read the single field, so they still degraded, but any test that
+    called ``complete()`` without stubbing ``httpx`` spent real money on real
+    keys, which is the exact leak this fixture is named after.
+
     The exception is deliberate and has to stay reachable: the prompt
     regression checks in ``test_employer_website_rung`` mean to call a real
     model and skip themselves when none is configured.  Setting
@@ -76,8 +85,12 @@ def _the_model_is_out_of_reach() -> Iterator[None]:
         yield
         return
     patch = pytest.MonkeyPatch()
-    patch.setenv("DEEPSEEK_API_KEY", "")
-    patch.setenv("DREAMJOB_LOCAL_LLM_BASE_URL", "")
+    for name in (
+        "DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY_2", "DEEPSEEK_API_KEY_3",
+        "DEEPSEEK_API_KEY_4", "DEEPSEEK_API_KEY_5",
+        "DREAMJOB_FALLBACK_LLM_API_KEY", "DREAMJOB_LOCAL_LLM_BASE_URL",
+    ):
+        patch.setenv(name, "")
     get_settings.cache_clear()
     yield
     patch.undo()

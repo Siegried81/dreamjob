@@ -28,7 +28,16 @@ class JobatAdapter(HtmlBoardAdapter):
     display_name = "Jobat.be"
     coverage_countries = ["BE"]
     tos_status = ToSStatus.RESTRICTED
-    requires_ack = False
+    # IR-101 acknowledgement is now REQUIRED. It was False, and on 2026-10-04
+    # this adapter fetched www.jobat.be 23 times with HTTP 200 on every one
+    # (http_cache, 14:14:04 -> 15:03:01) - while docs/Data_Gathering_Plan.md
+    # says "Do not touch Indeed, LinkedIn, StepStone or Jobat". The docstring
+    # below reasons that the 403 keeps collection harmless; the 23 successes
+    # say the 403 is not reliable, so "enabled" was not harmless either.
+    # `is_enabled()` (adapters/base.py:184) now refuses until an administrator
+    # acknowledges, which puts the decision in front of a human instead of
+    # leaving it to whether Cloudflare happens to answer.
+    requires_ack = True
     rate_limit_rps = 0.3
     legal_notes = (
         "Commercial board; terms restrict systematic re-use. Collection is limited to "

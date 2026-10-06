@@ -175,5 +175,14 @@ def test_plan_is_one_item_and_the_source_is_catalogued():
         "WHERE adapter_key = ?",
         ("board.remotive",),
     )
-    assert row is not None and row["tos_status"] == "permitted" and row["legal_notes"]
-    assert get_adapter("board.remotive").is_enabled() is True
+    # docs/Data_Gathering_Plan.md rule 3 names "Remotive's /api/*" among the
+    # paths not to fetch through the egress layer, as robots-disallowed.  The
+    # adapter therefore declares itself restricted and ack-gated, like
+    # board.jobat: anything else tells the source dashboard the opposite of the
+    # project's own finding.
+    assert row is not None and row["tos_status"] == "restricted" and row["legal_notes"]
+    # Ack-gated means not enabled until an operator acknowledges it, so the
+    # planner cannot budget items for a source the robots gate would refuse.
+    adapter = get_adapter("board.remotive")
+    assert adapter.requires_ack is True
+    assert adapter.is_enabled() is False

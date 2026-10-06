@@ -40,7 +40,13 @@ import logging
 from typing import Any
 from urllib.parse import urlencode
 
-from dreamjob.adapters.base import AdapterCapabilities, PlanItem, RawRecord, register_adapter
+from dreamjob.adapters.base import (
+    AdapterCapabilities,
+    PlanItem,
+    RawRecord,
+    ToSStatus,
+    register_adapter,
+)
 from dreamjob.adapters.jobboards._json_feed import JsonFeedAdapter
 from dreamjob.adapters.vacancy_source import (
     application_route,
@@ -70,6 +76,15 @@ class RemotiveAdapter(JsonFeedAdapter):
     display_name = "Remotive"
     coverage_countries: list[str] = []      # remote roles; candidates may live anywhere allowed
     rate_limit_rps = 0.05
+    # docs/Data_Gathering_Plan.md rule 3 names "Remotive's /api/*" among the
+    # paths not to fetch through the egress layer, as robots-disallowed.  The
+    # JsonFeedAdapter default of PERMITTED therefore states the opposite of the
+    # project's own finding: it registers the adapter enabled, tells the source
+    # dashboard it is permitted, and has the planner budget items for it, while
+    # the robots gate refuses the fetch at runtime.  Declared the way
+    # board.jobat was settled - the operator has to acknowledge it.
+    tos_status = ToSStatus.RESTRICTED
+    requires_ack = True
     legal_notes = (
         "Free public API (remotive.com/api/remote-jobs). Terms: link back to the job's URL "
         "on Remotive and mention Remotive as the source; do not submit Remotive jobs to "

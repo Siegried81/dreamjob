@@ -73,8 +73,16 @@ CACHEABLE_TASKS = {
     "summarise.page", "normalise.skill", "classify.reply", "classify.employer_kind",
 }
 
+# Statuses that say "this key cannot serve the call" rather than "this call is
+# malformed": the rotation moves to the next key on these and only on these.
+_KEY_SPECIFIC_STATUSES = (401, 403, 429)
+
 _RESPONSE_CACHE_MAX = 256
-_RESPONSE_CACHE: OrderedDict[str, tuple[str, Any]] = OrderedDict()
+# (text, usage, model, provider): the answering model and provider are stored
+# with the answer because the cache key is built from the model that was *asked*.
+# A call that failed over to the paid fallback is stored under the free model's
+# key, so replaying only the text logged every later hit as a free-model call.
+_RESPONSE_CACHE: OrderedDict[str, tuple[str, Any, str, str]] = OrderedDict()
 _RESPONSE_CACHE_LOCK = threading.Lock()
 
 
@@ -94,7 +102,7 @@ def _response_cache_key(
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def _response_cache_get(key: str) -> tuple[str, Any] | None:
+def _response_cache_get(key: str) -> tuple[str, Any, str, str] | None:
     with _RESPONSE_CACHE_LOCK:
         cached = _RESPONSE_CACHE.get(key)
         if cached is not None:
@@ -102,9 +110,11 @@ def _response_cache_get(key: str) -> tuple[str, Any] | None:
         return cached
 
 
-def _response_cache_put(key: str, text: str, usage: Any) -> None:
+def _response_cache_put(
+    key: str, text: str, usage: Any, model: str = "", provider: str = ""
+) -> None:
     with _RESPONSE_CACHE_LOCK:
-        _RESPONSE_CACHE[key] = (text, usage)
+        _RESPONSE_CACHE[key] = (text, usage, model, provider)
         _RESPONSE_CACHE.move_to_end(key)
         while len(_RESPONSE_CACHE) > _RESPONSE_CACHE_MAX:
             _RESPONSE_CACHE.popitem(last=False)
@@ -535,8 +545,20 @@ class LLMClient:
             "fallback",
         )
 
-    def _price(self, input_tokens: int, output_tokens: int) -> float:
+    def _price(self, input_tokens: int, output_tokens: int, provider: str = "") -> float:
+        """Cost in EUR for one call, at the rates of the endpoint that answered.
+
+        The rates are per endpoint, not global.  The main endpoint is a free
+        tier whose rates are legitimately 0, so charging a fallback call at the
+        main rates debits real spend at 0.00 EUR and hides it from the FR-364
+        call log.  Pass the provider the call actually went to.
+        """
         s = self.settings
+        if provider == "fallback":
+            return (
+                input_tokens / 1_000_000 * float(s.fallback_llm_cost_per_1m_input_eur)
+                + output_tokens / 1_000_000 * float(s.fallback_llm_cost_per_1m_output_eur)
+            )
         cfg = admin_config()
         rate_in = float(cfg.get("cost_per_1m_input_eur", s.llm_cost_per_1m_input_eur))
         rate_out = float(cfg.get("cost_per_1m_output_eur", s.llm_cost_per_1m_output_eur))
@@ -584,14 +606,18 @@ class LLMClient:
             )
             cached = _response_cache_get(cache_key)
             if cached is not None:
-                text, _cached_usage = cached
+                text, _cached_usage, answered_model, answered_provider = cached
+                # The hit is logged against whatever produced the answer, which
+                # is not always the model this call asked for.
+                hit_model = answered_model or model
+                hit_provider = answered_provider or provider
                 self._log_call(
-                    task, system, user, text, model, provider, Usage(), entity_type, entity_id,
-                    prompt_template, prompt_version,
+                    task, system, user, text, hit_model, hit_provider, Usage(),
+                    entity_type, entity_id, prompt_template, prompt_version,
                     int((time.monotonic() - started) * 1000), status="cached",
                 )
                 return LLMResult(
-                    text=text, usage=Usage(), model=model, provider=provider, raw={}
+                    text=text, usage=Usage(), model=hit_model, provider=hit_provider, raw={}
                 )
 
         # NFR-104: rough pre-flight estimate at ~4 characters per token.
@@ -611,11 +637,18 @@ class LLMClient:
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
-        # A rate-limited key is not a reason to wait while another key is idle:
-        # on a 429 the next configured key is tried at once, and the backoff
-        # below only applies once every key has answered 429.  Only the main
-        # endpoint's own key rotates; a local model or a routed override keeps
-        # the single key it was given.
+        # A key-specific failure is not a reason to wait while another key is
+        # idle: the next configured key is tried at once, and the backoff below
+        # only applies once every key has failed.  Only the main endpoint's own
+        # key rotates; a local model or a routed override keeps the single key
+        # it was given.
+        #
+        # "Key-specific" is 429 *and* the authorisation statuses (401/403).  A
+        # single revoked or mistyped first key used to end the rotation on the
+        # spot - keys 2..5 were never tried - and the call fell through to the
+        # paid fallback endpoint instead, on every call.  Statuses that are
+        # about the request rather than the key (400, 404) still stop the
+        # rotation, because another key answers them identically.
         keys = (
             self.settings.deepseek_api_keys or [api_key]
             if api_key == self.settings.deepseek_api_key
@@ -647,7 +680,7 @@ class LLMClient:
                                 },
                                 json=payload,
                             )
-                            if resp.status_code != 429:
+                            if resp.status_code not in _KEY_SPECIFIC_STATUSES:
                                 break
                     if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
                         time.sleep(2 ** attempt * 2)
@@ -661,6 +694,14 @@ class LLMClient:
                         break
                     time.sleep(2 ** attempt * 2)
             if data is not None:
+                if provider == "fallback":
+                    # The paid endpoint answering is a billable event with no
+                    # other trace: the generic failure warning below names the
+                    # endpoint that broke, not the one that took over.
+                    log.warning(
+                        "LLM task %r was answered by the paid fallback endpoint %s (model %s)",
+                        task, base_url, model,
+                    )
                 break
             log.warning("LLM endpoint %s failed for task %r: %s", base_url, task, last_error)
         if data is None:
@@ -684,7 +725,7 @@ class LLMClient:
             truncated=finish == "length",
         )
         usage.cost_eur = 0.0 if provider == "local" else self._price(
-            usage.input_tokens, usage.output_tokens
+            usage.input_tokens, usage.output_tokens, provider
         )
         latency_ms = int((time.monotonic() - started) * 1000)
 
@@ -732,7 +773,7 @@ class LLMClient:
             prompt_template, prompt_version, latency_ms,
         )
         if cache_key is not None:
-            _response_cache_put(cache_key, text, usage)
+            _response_cache_put(cache_key, text, usage, model, provider)
         return LLMResult(text=text, usage=usage, model=model, provider=provider, raw=data)
 
     def complete_json(

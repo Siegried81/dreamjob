@@ -1,17 +1,27 @@
 """Job-alert e-mails from the seeker's own mailbox, turned into vacancies (FR-261, FR-401).
 
-LinkedIn and ictjob.be both forbid automated collection of their sites, and
-both offer what the seeker actually needs instead: job-alert e-mails.  Reading
-those e-mails in the seeker's own inbox is ordinary use of a service the seeker
-subscribed to, so this module is the lawful route to those two sources:
+LinkedIn, ictjob.be, Glassdoor and Jobat all forbid or block automated
+collection of their sites, and all of them offer what the seeker actually needs
+instead: job-alert e-mails.  Reading those e-mails in the seeker's own inbox is
+ordinary use of a service the seeker subscribed to, so this module is the lawful
+route to those sources:
 
-*It never visits linkedin.com or ictjob.be.*  It reads messages already
-delivered to a mailbox the seeker connected - Gmail with ``gmail.readonly``,
-the scope the mail slice already requests, or another provider such as Yahoo
-over read-only IMAP with an app password (:class:`ImapAlertMailbox`) - and
-extracts each posting's title, employer, location
-and link from the alert's own HTML, and stores the link as ``source_url`` for
-the seeker to open by hand.
+*It never visits linkedin.com, ictjob.be, glassdoor.com or any jobat.be host.*
+It reads messages already delivered to a mailbox the seeker connected - Gmail
+with ``gmail.readonly``, the scope the mail slice already requests, or another
+provider such as Yahoo over read-only IMAP with an app password
+(:class:`ImapAlertMailbox`) - and extracts each posting's title, employer,
+location and link from the alert's own HTML, and stores the link as
+``source_url`` for the seeker to open by hand.
+
+*One source is a lead detector, not a link harvester.*  Jobat's alert names the
+postings but routes every link through one opaque redirector that holds neither
+a URL nor a posting id, so the only way to the offer's address would be to
+follow that redirect - a request to a Jobat host, which
+``docs/Data_Gathering_Plan.md`` section 6.1 rules out.  Its rows therefore carry
+title, employer and place with no ``source_url`` at all, and say so in
+``application_channel`` (:data:`LEAD_CHANNEL`): the opening is real, the offer
+is for the seeker to look up.  Nothing in this module ever requests a Jobat URL.
 
 *Only alert senders are read.*  The Gmail search names the alert senders, and
 every fetched message is checked again against :data:`ALERT_SOURCES` before it
@@ -19,7 +29,8 @@ is parsed, so a personal e-mail is never turned into a vacancy.
 
 *Deterministic, no model.*  An alert is a short list of links with a title and
 an "Employer · Location" line under each; a link pattern per source picks the
-postings out.  Nothing from the mailbox is sent to an LLM.
+postings out, and for the one source whose links say nothing the card's own
+shape does.  Nothing from the mailbox is sent to an LLM.
 
 *Same path as every other new posting.*  Records go through the
 knowledge-base writer, only rows it *created* count as new (a re-sent alert is
@@ -30,6 +41,7 @@ them - with the ``vacancy:<id>`` notification the refresh pass uses.
 The link patterns follow the alert layouts as published; the ictjob.be one in
 particular should be confirmed against a real alert, and a layout change shows
 up as ``alerts_without_postings`` in the pass report rather than as silence.
+The Jobat card rules were read off delivered alerts (French edition).
 """
 
 from __future__ import annotations
@@ -76,14 +88,27 @@ class AlertSource:
     sender_domain: str
     #: Local parts of the sender address that carry job alerts; empty = any.
     sender_prefixes: tuple[str, ...]
-    #: Matches a posting link and captures its id.
-    link_re: re.Pattern[str]
+    #: Matches a posting link and captures its id, or ``None`` when the alert
+    #: carries no usable posting link at all (see :attr:`is_lead_only`).
+    link_re: re.Pattern[str] | None
     #: The canonical posting URL built from ``{id}`` (and the link's ``{host}``),
     #: or ``None`` to keep the matched URL without its tracking query.
     canonical: str | None
-    #: ``title_first`` (LinkedIn, ictjob) or ``employer_first`` (Glassdoor:
-    #: employer, rating, title, place inside the posting link).
+    #: ``title_first`` (LinkedIn, ictjob), ``employer_first`` (Glassdoor:
+    #: employer, rating, title, place inside the posting link) or
+    #: ``lead_cards`` (Jobat: no posting link, cards read by their shape).
     layout: str = "title_first"
+
+    @property
+    def is_lead_only(self) -> bool:
+        """True when this sender's alert names postings but links to none.
+
+        It is derived from ``link_re`` rather than declared separately so the
+        two cannot disagree: no link pattern means no posting URL can be
+        produced, and a row from such an alert is a lead the seeker has to
+        follow up by hand, not something she can open.
+        """
+        return self.link_re is None
 
 
 ALERT_SOURCES: tuple[AlertSource, ...] = (
@@ -118,12 +143,32 @@ ALERT_SOURCES: tuple[AlertSource, ...] = (
         canonical="https://{host}/partner/jobListing.htm?jobListingId={id}",
         layout="employer_first",
     ),
+    AlertSource(
+        key="alert.jobat",
+        label="Jobat job alert",
+        sender_domain="jobat.be",
+        # The alert arrives from jobat@jobs.jobat.be, but the prefix is left
+        # open on purpose: if Jobat renames the sender, the mails still reach
+        # the parser and a layout surprise shows up in
+        # ``alerts_without_postings`` instead of as silence.
+        sender_prefixes=(),
+        # Every link in a Jobat alert - navigation and postings alike - is the
+        # same opaque redirector (``interactief.jobat.be/optiext/...?ID=<blob>``)
+        # and the blob holds neither a URL nor a posting id.  Resolving it would
+        # mean requesting a Jobat host, which Data_Gathering_Plan section 6.1
+        # rules out, so this source deliberately has no link pattern and
+        # produces rows with no ``source_url``.
+        link_re=None,
+        canonical=None,
+        layout="lead_cards",
+    ),
 )
 
 #: Gmail search for the alert senders; ``after:`` or ``newer_than:`` is added.
 GMAIL_QUERY = (
     "from:(jobalerts-noreply@linkedin.com OR jobs-noreply@linkedin.com "
-    "OR jobs-listings@linkedin.com OR ictjob.be OR noreply@glassdoor.com)"
+    "OR jobs-listings@linkedin.com OR ictjob.be OR noreply@glassdoor.com "
+    "OR jobat.be)"
 )
 
 #: How far back the first pass of a newly connected mailbox looks.
@@ -132,6 +177,14 @@ FIRST_PASS_WINDOW = "newer_than:14d"
 MAX_MESSAGES = 50
 #: An alert snippet is a title, an employer and a place - no description.
 ALERT_CONFIDENCE = 0.6
+#: ``application_channel`` for a posting whose alert carried no link.  The
+#: column is how the row says what can be done with it (``email``, ``ats_form``,
+#: ``url``, ``speculative``); none of those fits a posting that really is
+#: advertised but whose address we do not have, and an empty ``url`` channel
+#: would read as a broken link rather than as work left to do.  So the row says
+#: so in the column the seeker already reads: the opening is real, the offer has
+#: to be looked up on the board by hand.
+LEAD_CHANNEL = "manual_search"
 SETTING_CURSOR_PREFIX = "job_alerts.cursor."
 
 #: Link texts that are buttons, not posting titles, in the alert languages.
@@ -189,9 +242,36 @@ def _html_of(message: EmailMessage) -> str:
     return part.get_content() if part is not None else ""
 
 
+def _source_host(source: AlertSource, href: str) -> str | None:
+    """A host inside ``href`` belonging to the source's own domain, if there is one.
+
+    Read out of the URL text rather than from ``urlparse().netloc`` because the
+    link patterns deliberately match the source's host *anywhere* in the href:
+    alert mail routes its links through a tracking redirector, so the netloc is
+    the tracker's and the source's real host sits in a query parameter.
+    """
+    stem = re.escape(source.sender_domain.split(".")[0])
+    match = re.search(
+        rf"(?:^|[/@.])((?:[\w-]+\.)*{stem}\.[a-z]{{2,}}(?:\.[a-z]{{2,}})?)(?=[/:?#]|$)",
+        href,
+        re.IGNORECASE,
+    )
+    return match.group(1) if match else None
+
+
 def _posting_url(source: AlertSource, href: str, posting_id: str) -> str:
+    """The URL stored for one posting found in an alert mail.
+
+    A ``canonical`` template needs a host, and it must be one the source
+    actually publishes on.  Taking it from the href's netloc synthesised a URL
+    on whatever host the mail linked through - for a tracked link, the
+    redirector's - producing a dead link that looks canonical.  The host is
+    read from the source's own domain inside the href, and falls back to the
+    sender domain, which every locale of the site redirects from.
+    """
     if source.canonical:
-        return source.canonical.format(id=posting_id, host=urlparse(href).netloc)
+        host = _source_host(source, href) or source.sender_domain
+        return source.canonical.format(id=posting_id, host=host)
     return href.split("?", 1)[0].split("#", 1)[0]
 
 
@@ -216,10 +296,16 @@ def parse_alert(message: EmailMessage, source: AlertSource) -> list[dict[str, An
     Reading after the title rather than after the posting's last link matters:
     the last link is usually a "View job" button, and what follows it is the
     next posting.
+
+    A lead-only source (:attr:`AlertSource.is_lead_only`) has no posting id to
+    group by and is read by :func:`_lead_cards` instead.
     """
     parser = _LinkText()
     parser.feed(_html_of(message))
     pieces = parser.pieces
+
+    if source.is_lead_only:
+        return _lead_cards(pieces)
 
     order: list[str] = []
     urls: dict[str, str] = {}
@@ -324,13 +410,104 @@ def _read_posting(
             "arrangement": arrangement}
 
 
+#: How many plain texts after a linked title can still belong to its card: the
+#: employer, the place, a badge ("Topjob") and a contract type.  A salary range
+#: follows those in several pieces and is not read - the alert shows it as a
+#: rounded "De ... à ... par mois", not as the posting's figure.
+_LEAD_CARD_DETAILS = 4
+
+
+def _read_lead_card(title: str, details: list[str]) -> dict[str, Any] | None:
+    """One Jobat card: its linked title plus the plain texts under it.
+
+    The employer and the place are rendered as ``<strong>Employer</strong> |
+    Place``, which flattens either to two pieces (``"Employer"``, ``"| Place"``)
+    or, if the bold is ever dropped, to one (``"Employer | Place"``).  Both are
+    read here: the separator is the evidence, not the piece boundary.  A card
+    with no separated place is not a posting card - that is what keeps the
+    footer's ``Privacy policy | Contact`` row and the "Afficher tous les jobs"
+    button out - so it returns ``None`` rather than a half-filled row.
+    """
+    if not title or title.lower() in _BUTTON_TEXTS:
+        return None
+    for position, detail in enumerate(details):
+        employer, separator, place = detail.partition("|")
+        if not separator or not place.strip():
+            continue
+        # "| Place" on its own line: the employer is what came before it.
+        name = employer.strip() or " ".join(details[:position]).strip()
+        return {"title": title, "employer": name or None,
+                "location": place.strip(), "arrangement": None}
+    return None
+
+
+def _lead_cards(pieces: list[tuple[str, str | None]]) -> list[dict[str, Any]]:
+    """The postings a link-less alert lists, read from the shape of each card.
+
+    Jobat's alert routes every link - postings, navigation and footer alike -
+    through one opaque redirector, so the href cannot say which anchor is a
+    posting and there is no id to key on.  The card's shape is the only
+    evidence left: an anchor is a posting when the plain texts that follow it,
+    up to the next link, name an employer and a place.  Navigation ("19
+    nouveaux jobs", "Afficher tous les jobs", "Modifier", the footer) never has
+    that shape, and neither would a rewritten layout - which is what keeps
+    ``alerts_without_postings`` an alarm rather than noise.
+
+    ``posting_id`` and ``source_url`` are empty by construction: the alert
+    states no id and no address, and inventing either (the redirector URL, a
+    hash of the title) would put something in the row that the mail does not
+    say, and that something would then be followed or deduplicated on.
+    """
+    cards: list[dict[str, Any]] = []
+    index = 0
+    while index < len(pieces):
+        text, href = pieces[index]
+        index += 1
+        if href is None:
+            continue
+        # An anchor can hold several text pieces; they are all one title.
+        titles = [text]
+        while index < len(pieces) and pieces[index][1] == href:
+            titles.append(pieces[index][0])
+            index += 1
+        details: list[str] = []
+        while (index < len(pieces) and pieces[index][1] is None
+               and len(details) < _LEAD_CARD_DETAILS):
+            details.append(pieces[index][0])
+            index += 1
+        card = _read_lead_card(" ".join(titles), details)
+        if card is not None:
+            cards.append({"posting_id": None, "source_url": None, **card})
+    return cards
+
+
 def to_records(
     postings: list[dict[str, Any]], source: AlertSource, received_at: str
 ) -> list[NormalisedRecord]:
-    """Map alert postings onto ``vacancy`` columns, provenance included."""
+    """Map alert postings onto ``vacancy`` columns, provenance included.
+
+    A lead-only source gets two fields differently, and both are deliberate.
+    ``source_url`` stays empty: the alert has no posting address, and storing
+    the redirector in its place would hand a Jobat URL to every part of the
+    system that follows ``source_url`` - the apply route, the refresh pass -
+    which is exactly the request this source exists to avoid.  And the channel
+    says :data:`LEAD_CHANNEL` rather than the ``url`` that an empty URL would
+    otherwise produce, so a row the seeker has to chase herself never looks
+    like one with a broken link.  ``posted_at`` is the alert's own date, which
+    the dedup key needs: without a date two different openings sharing a title,
+    an employer and a place would have only the posting URL to tell them apart,
+    and here there is none (see :func:`pipeline.dedup.vacancy_dedup_key`).
+    """
     records: list[NormalisedRecord] = []
     for posting in postings:
-        channel, target = application_route(posting["source_url"], "")
+        url = posting.get("source_url") or None
+        if source.is_lead_only:
+            channel, target = LEAD_CHANNEL, ""
+            note = (f" (from a {source.label} e-mail, which carries no link to the "
+                    "posting: look the offer up on the board itself)")
+        else:
+            channel, target = application_route(url or "", "")
+            note = f" (from a {source.label} e-mail)"
         records.append(
             NormalisedRecord(
                 entity_type="vacancy",
@@ -340,14 +517,14 @@ def to_records(
                     "description": " - ".join(
                         p for p in (posting["title"], posting.get("employer"),
                                     posting.get("location")) if p
-                    ) + f" (from a {source.label} e-mail)",
+                    ) + note,
                     "location": posting.get("location"),
                     "country": country_from_location(posting.get("location") or "", ""),
                     "work_arrangement": normalise_work_arrangement(posting.get("arrangement")),
                     "posted_at": received_at or None,
                     "application_channel": channel,
                     "application_target": target,
-                    "source_url": posting["source_url"],
+                    "source_url": url,
                 },
                 confidence=ALERT_CONFIDENCE,
                 provenance={"alert_source": source.key},
@@ -372,6 +549,50 @@ def _live_campaigns(job_seeker_id: str) -> list[str]:
     ]
 
 
+class MessageGone(Exception):
+    """The message is no longer in the mailbox.
+
+    A typed exception rather than a string the caller has to interpret. The
+    decision it carries - may the cursor move past this message? - loses mail
+    when it is wrong, so it is made once, where the server's answer is still in
+    hand, instead of being re-derived from a formatted message later.
+
+    Anything else raised from a fetch means "I could not read it", and the
+    caller must fail the pass so the window is retried.
+    """
+
+
+#: IMAP response codes that make a `NO` transient rather than final. RFC 5530
+#: wording plus the two Yahoo and Gmail send back under load. A `NO` carrying
+#: one of these is the mailbox refusing us right now, not a missing message.
+_IMAP_TRANSIENT_CODE = re.compile(
+    r"\[(?:UNAVAILABLE|SERVERBUG|LIMIT|OVERQUOTA|INUSE|TRYCREATE|"
+    r"AUTHENTICATIONFAILED|AUTHORIZATIONFAILED|EXPIRED|PRIVACYREQUIRED|"
+    r"CONTACTADMIN|NOPERM|CANNOT)\]",
+    re.IGNORECASE,
+)
+
+
+def _imap_detail(payload: object) -> str:
+    """The server's own words from an imaplib payload, for the exception text.
+
+    imaplib hands back a list whose entries are bytes, tuples or None. Keeping
+    the text is the whole point: it is what distinguishes a deleted message from
+    a busy server, and an earlier version discarded it.
+    """
+    if not isinstance(payload, (list, tuple)):
+        return ""
+    parts: list[str] = []
+    for item in payload:
+        if isinstance(item, bytes):
+            parts.append(item.decode("utf-8", "replace"))
+        elif isinstance(item, tuple):
+            parts.extend(
+                p.decode("utf-8", "replace") for p in item if isinstance(p, bytes)
+            )
+    return " ".join(parts).strip()
+
+
 def ingest_account(account: dict, *, backend: Any = None) -> dict[str, Any]:
     """Read the new alert e-mails of one connected mailbox and feed their postings."""
     from dreamjob.mail.gmail import GmailBackend  # noqa: PLC0415 - optional OAuth stack
@@ -387,10 +608,34 @@ def ingest_account(account: dict, *, backend: Any = None) -> dict[str, Any]:
         ids = mailbox.list_message_ids(_gmail_query(cursor), max_results=MAX_MESSAGES)
 
     report = {"account_id": account["id"], "alerts": 0, "alerts_without_postings": 0,
-              "postings": 0, "new_vacancies": 0, "opportunities_added": 0, "notifications": 0}
+              "alerts_vanished": 0, "postings": 0, "new_vacancies": 0,
+              "opportunities_added": 0, "notifications": 0}
     campaigns = _live_campaigns(seeker_id)
     for gmail_id in ids:
-        message = email.message_from_bytes(mailbox.fetch_raw(gmail_id), policy=email.policy.default)
+        # A message can disappear between the listing and the fetch, and here
+        # that is the normal case rather than an edge one: the seeker is told she
+        # may clear alerts once they are collected, and the listing is a snapshot
+        # taken seconds earlier. IMAP answers NO for a uid that is gone (Yahoo:
+        # "[CLIENTBUG] FETCH Bad sequence in the command"), and raising aborted
+        # the whole pass - so deleting one already-read alert cost every alert
+        # queued behind it. Counted and skipped: a pass that misses one mail is
+        # still a pass, and the counter keeps it from being silent.
+        try:
+            raw = mailbox.fetch_raw(gmail_id)
+        except MessageGone as exc:
+            report["alerts_vanished"] += 1
+            log.info("Alert %r is no longer in the mailbox; skipping it (%s)",
+                     gmail_id, exc)
+            continue
+        # Anything that is not MessageGone means "I could not read it": a
+        # revoked token, an exhausted quota, a dropped socket, a busy server.
+        # It propagates on purpose, so `ingest_all` counts an error AND
+        # `set_setting(cursor_key, started)` below is never reached - the next
+        # pass then retries the same window. Swallowing these was worse than the
+        # crash it replaced: the pass reported success having read nothing while
+        # the cursor moved past every message in the window, which on Gmail
+        # (second-precision cursor) loses them for good.
+        message = email.message_from_bytes(raw, policy=email.policy.default)
         source = source_for(_first_address(message.get("From"))[0])
         if source is None:
             continue
@@ -464,10 +709,35 @@ class ImapAlertMailbox:
         return (data[0] or b"").split()[-limit:]
 
     def fetch_raw(self, uid: bytes) -> bytes:
+        """The raw message, or a `MessageGone` / `RuntimeError` saying which.
+
+        The distinction is made HERE, by a typed exception, rather than left to
+        the caller to recover from the string. An earlier version raised
+        `RuntimeError(f"...failed: {typ}")` and threw the server's explanatory
+        text away, so `NO [UNAVAILABLE] Server busy` and `NO [TRYCREATE]` arrived
+        at the caller as the same four characters as a genuinely deleted
+        message - and the caller skipped them and moved the cursor past them.
+        That lost mail for a transient reason. The server's own words are the
+        only thing that tells the two apart, so they must survive the raise.
+
+        Two shapes mean "not there any more":
+        - `NO` with no response code (or `[CLIENTBUG]`, which is what Yahoo
+          answers for a vanished uid);
+        - `OK` with no untagged FETCH response, which is what RFC 3501 section
+          6.4.8 specifies and what `imaplib` returns as `("OK", [None])`. The
+          earlier version re-raised on this one, i.e. it aborted the whole pass
+          on the standard case it was written to survive.
+        """
         assert self._client is not None, "use ImapAlertMailbox as a context manager"
         typ, payload = self._client.uid("FETCH", uid, "(RFC822)")
-        if typ != "OK" or not payload or not isinstance(payload[0], tuple):
-            raise RuntimeError(f"IMAP fetch of {uid!r} failed: {typ}")
+        detail = _imap_detail(payload)
+        if typ == "OK" and (not payload or not isinstance(payload[0], tuple)):
+            # RFC 3501: a FETCH of a uid that no longer exists succeeds silently.
+            raise MessageGone(f"IMAP fetch of {uid!r}: OK with no message ({detail})")
+        if typ != "OK" or not isinstance(payload[0], tuple):
+            if typ == "NO" and not _IMAP_TRANSIENT_CODE.search(detail):
+                raise MessageGone(f"IMAP fetch of {uid!r} failed: NO {detail}")
+            raise RuntimeError(f"IMAP fetch of {uid!r} failed: {typ} {detail}")
         return payload[0][1]
 
 
@@ -487,13 +757,22 @@ def _ingest_imap(totals: dict[str, Any]) -> None:
     with ImapAlertMailbox(settings.alerts_imap_host, user, password) as mailbox:
         result = ingest_account({"id": f"imap:{user}", "job_seeker_id": seeker["id"]},
                                 backend=mailbox)
-    for key in ("alerts", "new_vacancies", "opportunities_added", "notifications"):
+    for key in ("alerts", "alerts_without_postings", "alerts_vanished",
+                "postings", "new_vacancies", "opportunities_added",
+                "notifications"):
         totals[key] += int(result.get(key) or 0)
 
 
 def ingest_all() -> dict[str, Any]:
     """Every connected mailbox; one failing mailbox never stops the others."""
-    totals: dict[str, Any] = {"mailboxes": 0, "errors": 0, "alerts": 0, "new_vacancies": 0,
+    # alerts_without_postings and postings are aggregated too: the module
+    # docstring promises that a changed alert layout "shows up as
+    # alerts_without_postings in the pass report rather than as silence", and
+    # the scheduler logs THESE totals - so leaving them out of the roll-up made
+    # that alarm invisible in production, which is the only place it matters.
+    totals: dict[str, Any] = {"mailboxes": 0, "errors": 0, "alerts": 0,
+                              "alerts_without_postings": 0, "alerts_vanished": 0,
+                              "postings": 0, "new_vacancies": 0,
                               "opportunities_added": 0, "notifications": 0}
     for account in dispatch_repo.accounts_to_poll("gmail_oauth"):
         totals["mailboxes"] += 1
@@ -503,7 +782,9 @@ def ingest_all() -> dict[str, Any]:
             log.exception("Job-alert pass failed for mailbox %s", account.get("id"))
             totals["errors"] += 1
             continue
-        for key in ("alerts", "new_vacancies", "opportunities_added", "notifications"):
+        for key in ("alerts", "alerts_without_postings", "alerts_vanished",
+                    "postings", "new_vacancies", "opportunities_added",
+                    "notifications"):
             totals[key] += int(result.get(key) or 0)
     try:
         _ingest_imap(totals)

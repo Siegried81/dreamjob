@@ -67,8 +67,13 @@ def orphan_raw_documents(
     candidates = query_all(_ORPHANS, (cutoff, int(limit)))
     if not candidates:
         return []
+    # `body_path` is written with the host's own separator, so on Windows every
+    # stored path uses backslashes.  Splitting on "/" alone left `live` full of
+    # whole path strings, which never match a content hash: the set was
+    # effectively empty and every body past the retention window was deleted as
+    # an orphan while an unexpired http_cache row was still serving it.
     live = {
-        str(row["body_path"]).rsplit("/", 1)[-1].split(".")[0]
+        str(row["body_path"]).replace("\\", "/").rsplit("/", 1)[-1].split(".")[0]
         for row in query_all(_LIVE_CACHE_BODIES, (now,))
     }
     return [row for row in candidates if str(row["content_hash"]) not in live]

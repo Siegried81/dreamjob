@@ -6,11 +6,17 @@ The properties pinned down here:
   e-mail that merely contains a LinkedIn link is never parsed;
 * a LinkedIn and an ictjob.be alert yield title, employer, place and a clean
   posting URL, and button links ("View job") never become titles;
+* a Jobat alert, whose every link is one opaque redirector, yields title,
+  employer and place with *no* URL - navigation is still kept out, the rows say
+  in ``application_channel`` that the offer has to be looked up, and two
+  distinct openings never collapse onto one row for want of a URL;
 * a pass feeds new postings to the seeker's live campaign and notifies once;
   the same alert read again creates nothing (a merge is not news).
 
 No network and no Gmail: the mailbox is a fake with ``list_message_ids`` and
-``fetch_raw``, the two calls the real ``GmailBackend`` offers.
+``fetch_raw``, the two calls the real ``GmailBackend`` offers.  Nothing here
+requests a jobat.be URL either: the Jobat fixture is the delivered alert's
+markup, redirector hrefs included, parsed in process.
 """
 
 from __future__ import annotations
@@ -18,6 +24,8 @@ from __future__ import annotations
 import email
 import email.policy
 from email.message import EmailMessage
+
+import pytest
 
 from dreamjob.db.connection import query_all
 from dreamjob.db.repositories import admin as admin_repo
@@ -219,7 +227,8 @@ def test_the_imap_search_names_every_alert_sender_and_a_day(monkeypatch) -> None
     assert imap.logged_in == ("me@yahoo.fr", "app-pw")
     assert imap.selected == ("INBOX", True)        # read-only
     assert imap.searches[0][1:] == (
-        "OR", "FROM", '"linkedin.com"', "OR", "FROM", '"ictjob.be"', "FROM", '"glassdoor.com"',
+        "OR", "FROM", '"linkedin.com"', "OR", "FROM", '"ictjob.be"',
+        "OR", "FROM", '"glassdoor.com"', "FROM", '"jobat.be"',
         "SINCE", "04-Oct-2026",
     )
     assert imap.closed
@@ -363,3 +372,381 @@ def test_the_owner_setting_sends_a_mailbox_to_another_account(monkeypatch) -> No
 
     assert totals["errors"] == 0 and totals["new_vacancies"] == 2
     assert len(repo.list_notifications(campaign["seeker_id"], kind="new_vacancy")) == 2
+
+
+# ---------------------------------------------------------------------------
+# Jobat: a lead detector, not a link harvester
+# ---------------------------------------------------------------------------
+
+# The layout Jobat actually sends (read off two delivered alerts, FR edition):
+# every link - the "19 nouveaux jobs" header, each title, "Afficher tous les
+# jobs", "Modifier" and the footer - is the same optiextension.dll redirector,
+# so only the card's shape says which anchor is a posting: a linked title, the
+# employer in bold, then "&nbsp;|&nbsp;Place", then badges and a contract type.
+# The last two cards are the shapes that have to survive: a title carrying a
+# pipe of its own, and an employer and place rendered as one piece.
+_JOBAT_LINK = "https://interactief.jobat.be/optiext/optiextension.dll?ID="
+JOBAT_HTML = f"""
+<html><head><style>.x{{color:red}}</style></head><body>
+<p><strong>Il y a <a href="{_JOBAT_LINK}blob0">19 nouveaux jobs</a> pour vous.</strong></p>
+<table><tr><td>
+  <span><a href="{_JOBAT_LINK}blob1">Senior Business Analyst &ndash; IT programme</a></span><br />
+  <strong>Kingfisher It</strong>
+  <span>&nbsp;|&nbsp;Dilbeek</span><br />
+  <span>Dur&eacute;e ind&eacute;termin&eacute;e</span>
+</td></tr></table>
+<table><tr><td>
+  <span><a href="{_JOBAT_LINK}blob2">Data engineer (VDAB)</a></span><br />
+  <strong>Vlaanderen Connect</strong>
+  <span>&nbsp;|&nbsp;Brabant Flamand</span><br />
+  <span>Topjob</span><span>Dur&eacute;e d&eacute;termin&eacute;e</span>
+</td></tr></table>
+<a href="{_JOBAT_LINK}blob3">Afficher tous les jobs</a>
+<table><tr><td>
+  <span><a href="{_JOBAT_LINK}blob4">Real Estate Valuation Analyst | Finance, Data &amp; AI</a></span><br />
+  <strong>Headcount</strong>
+  <span>&nbsp;|&nbsp;Saint-Josse-Ten-Noode</span>
+</td></tr></table>
+<table><tr><td>
+  <span><a href="{_JOBAT_LINK}blob5">Data Quality Expert</a></span><br />
+  <span>Smals&nbsp;|&nbsp;Bruxelles</span>
+</td></tr></table>
+<p>Vos crit&egrave;res :</p><p>business analyst , Bruxelles</p>
+<a href="{_JOBAT_LINK}blob6">Modifier</a>
+<p>&copy; copyright 2026 - Jobat - Z1 Researchpark 110 - 1731 ZELLIK</p>
+<a href="{_JOBAT_LINK}blob7">Privacy policy</a> | <a href="{_JOBAT_LINK}blob8">Contact</a>
+| <a href="{_JOBAT_LINK}blob9">Gestion des courriels</a>
+<p>Ce message a &eacute;t&eacute; envoy&eacute; &agrave;
+<a href="{_JOBAT_LINK}blobA">seeker@example.test</a>.</p>
+<p>Vous ne souhaitez plus recevoir cette alerte emploi ?
+<a href="{_JOBAT_LINK}blobB">G&eacute;rez vos pr&eacute;f&eacute;rences ici</a>.</p>
+</body></html>
+"""
+
+
+def test_a_jobat_alert_reads_cards_by_their_shape_and_keeps_navigation_out() -> None:
+    source = job_alerts.source_for("jobat@jobs.jobat.be")
+    message = _parsed(_message("Jobat <jobat@jobs.jobat.be>", JOBAT_HTML))
+
+    postings = job_alerts.parse_alert(message, source)
+
+    assert (source.key, source.is_lead_only) == ("alert.jobat", True)
+    assert [(p["title"], p["employer"], p["location"]) for p in postings] == [
+        ("Senior Business Analyst – IT programme", "Kingfisher It", "Dilbeek"),
+        ("Data engineer (VDAB)", "Vlaanderen Connect", "Brabant Flamand"),
+        # A pipe inside the title is part of the title; the separator that
+        # matters is the one in the plain text under it.
+        ("Real Estate Valuation Analyst | Finance, Data & AI", "Headcount",
+         "Saint-Josse-Ten-Noode"),
+        ("Data Quality Expert", "Smals", "Bruxelles"),
+    ]
+    # Nothing is invented for the missing link, not even the redirector.
+    assert all(p["source_url"] is None and p["posting_id"] is None for p in postings)
+
+
+def test_a_jobat_row_says_the_offer_has_to_be_looked_up() -> None:
+    source = job_alerts.source_for("jobat@jobs.jobat.be")
+    message = _parsed(_message("Jobat <jobat@jobs.jobat.be>", JOBAT_HTML))
+
+    records = job_alerts.to_records(
+        job_alerts.parse_alert(message, source), source, "2026-10-06T04:50:08+00:00"
+    )
+
+    first = records[0].data
+    assert first["source_url"] is None
+    assert first["application_channel"] == job_alerts.LEAD_CHANNEL == "manual_search"
+    assert first["application_target"] == ""
+    # The row carries the reason on its face, wherever the description is read.
+    assert "carries no link to the posting" in first["description"]
+    assert first["posted_at"] == "2026-10-06T04:50:08+00:00"
+    assert records[0].provenance == {"alert_source": "alert.jobat"}
+
+
+def test_a_link_less_alert_whose_layout_changed_is_reported_not_silent() -> None:
+    """The counter has to stay an alarm: no card shape must mean no postings."""
+    source = job_alerts.source_for("jobat@jobs.jobat.be")
+    # The same redirector links, none of them in a card.
+    html = (f'<html><body><a href="{_JOBAT_LINK}b1">19 nouveaux jobs</a>'
+            f'<p>pour vous.</p><a href="{_JOBAT_LINK}b2">Afficher tous les jobs</a>'
+            f'<p>Vos crit&egrave;res :</p><p>business analyst</p></body></html>')
+    message = _parsed(_message("Jobat <jobat@jobs.jobat.be>", html))
+
+    assert job_alerts.parse_alert(message, source) == []
+
+
+def test_jobat_leads_with_no_url_still_key_apart_and_a_repeat_merges() -> None:
+    """The dedup key without a URL: the alert's own date is what keeps it safe.
+
+    The posting URL is only the key's discriminator when there is no posting
+    date, so a dateless lead with no URL would have no discriminator at all.
+    The alert's date supplies one: two openings at one employer must still key
+    apart, and the same opening re-sent must still be one row.
+    """
+    from dreamjob.pipeline import dedup
+
+    first = dedup.vacancy_dedup_key(
+        "Data Quality Expert", "Smals", "Bruxelles", "2026-10-06T04:50:08+00:00", None)
+    other = dedup.vacancy_dedup_key(
+        "Senior Data Analyst", "Smals", "Bruxelles", "2026-10-06T04:50:08+00:00", None)
+    next_day = dedup.vacancy_dedup_key(
+        "Data Quality Expert", "Smals", "Bruxelles", "2026-10-07T04:50:08+00:00", None)
+    next_week = dedup.vacancy_dedup_key(
+        "Data Quality Expert", "Smals", "Bruxelles", "2026-10-14T04:50:08+00:00", None)
+
+    assert first != other                       # two openings, two rows
+    assert first == next_day                    # the same opening, re-sent
+    # A new week keys differently, and the fuzzy pass is what catches it.
+    assert first != next_week
+    row = {"title": "Data Quality Expert", "company_name_raw": "Smals",
+           "location": "Bruxelles", "posted_at": "2026-10-14T04:50:08+00:00"}
+    held = {"id": "v1", "title": "Data Quality Expert", "company_name_raw": "Smals",
+            "location": "Bruxelles", "posted_at": "2026-10-06T04:50:08+00:00"}
+    matched, score = dedup.best_vacancy_match(row, [held])
+    assert matched["id"] == "v1" and score >= dedup.VACANCY_MATCH_THRESHOLD
+    different = {"id": "v2", "title": "Senior Data Analyst", "company_name_raw": "Smals",
+                 "location": "Bruxelles", "posted_at": "2026-10-06T04:50:08+00:00"}
+    assert dedup.best_vacancy_match(row, [different])[0] is None
+
+
+def test_a_jobat_pass_feeds_leads_once() -> None:
+    campaign = seed_campaign("alerts-jobat@example.test")
+    seeker_id = campaign["seeker_id"]
+    # Own titles and employers: the scratch database is shared, and a posting
+    # another test stored under the same title would merge instead of be new.
+    html = (JOBAT_HTML.replace("Senior Business Analyst &ndash; IT programme",
+                               "Lead Reporting Analyst")
+            .replace("Data engineer (VDAB)", "Streaming Data Engineer (KLM)")
+            .replace("Real Estate Valuation Analyst | Finance, Data &amp; AI",
+                     "Valuation Analyst | Finance &amp; AI")
+            .replace("Data Quality Expert", "Reference Data Steward")
+            .replace("Kingfisher It", "Zephyr It").replace("Vlaanderen Connect", "Connect Vl")
+            .replace("Headcount", "Headwind").replace("Smals", "Smalls"))
+    mailbox = FakeMailbox({"m1": _message("Jobat <jobat@jobs.jobat.be>", html)})
+
+    report = job_alerts.ingest_account(_account(seeker_id), backend=mailbox)
+
+    assert report["alerts"] == 1 and report["alerts_without_postings"] == 0
+    assert report["postings"] == 4 and report["new_vacancies"] == 4
+    assert report["opportunities_added"] == 4
+    rows = query_all(
+        "SELECT title, source_url, application_channel FROM vacancy "
+        "WHERE source_adapter = 'alert.jobat' AND company_name_raw = 'Zephyr It'", ())
+    assert [(r["source_url"], r["application_channel"]) for r in rows] == [
+        (None, "manual_search")]
+
+    again = job_alerts.ingest_account(_account(seeker_id), backend=mailbox)
+
+    assert again["postings"] == 4 and again["new_vacancies"] == 0
+
+
+def test_the_three_linked_senders_are_untouched_by_the_link_less_one() -> None:
+    """The optional link pattern must not have moved anything for the others."""
+    linkedin, ictjob, glassdoor, jobat = job_alerts.ALERT_SOURCES
+    assert [s.key for s in (linkedin, ictjob, glassdoor)] == [
+        "alert.linkedin", "alert.ictjob", "alert.glassdoor"]
+    assert not any(s.is_lead_only for s in (linkedin, ictjob, glassdoor))
+    assert jobat.is_lead_only and jobat.layout == "lead_cards"
+
+    message = _parsed(_message("LinkedIn <jobalerts-noreply@linkedin.com>", LINKEDIN_HTML))
+    records = job_alerts.to_records(
+        job_alerts.parse_alert(message, linkedin), linkedin, "2026-10-04T09:00:00+00:00")
+
+    assert records[0].confidence == job_alerts.ALERT_CONFIDENCE
+    assert records[0].data == {
+        "company_name_raw": "Northwind",
+        "title": "Senior Data Engineer",
+        "description": "Senior Data Engineer - Northwind - Brussels, Belgium "
+                       "(from a LinkedIn job alert e-mail)",
+        "location": "Brussels, Belgium",
+        "country": "BE",
+        "work_arrangement": None,
+        "posted_at": "2026-10-04T09:00:00+00:00",
+        "application_channel": "url",
+        "application_target": "https://www.linkedin.com/jobs/view/3901234567/",
+        "source_url": "https://www.linkedin.com/jobs/view/3901234567/",
+    }
+
+
+def test_a_vanished_message_is_skipped_not_fatal() -> None:
+    """Deleting an already-collected alert must not cost the alerts queued behind
+    it. The listing is a snapshot taken seconds before the fetch, and the seeker
+    is explicitly told she may clear collected alerts - so a uid that is gone is
+    the normal case here, not an edge one. IMAP answers NO for it (Yahoo:
+    "[CLIENTBUG] FETCH Bad sequence in the command"), and raising used to abort
+    the whole pass.
+
+    Observed for real on 2026-10-06: uid 484936 had been deleted between the
+    listing and the fetch, and the pass returned errors=1 having read no alerts.
+    """
+    campaign = seed_campaign("alerts-vanished@example.test")
+    seeker_id = campaign["seeker_id"]
+
+    class _PartlyGoneMailbox:
+        def __init__(self) -> None:
+            self.fetched: list[str] = []
+
+        def list_message_ids(self, query, max_results=50):
+            return ["gone", "good"]
+
+        def fetch_raw(self, message_id):
+            self.fetched.append(message_id)
+            if message_id == "gone":
+                raise job_alerts.MessageGone(
+                    "IMAP fetch of b'484936' failed: NO [CLIENTBUG] Bad sequence"
+                )
+            return _message("LinkedIn <jobalerts-noreply@linkedin.com>",
+                            LINKEDIN_HTML).as_bytes()
+
+    mailbox = _PartlyGoneMailbox()
+    report = job_alerts.ingest_account(_account(seeker_id), backend=mailbox)
+
+    # Both were attempted, and the survivor was still parsed.
+    assert mailbox.fetched == ["gone", "good"]
+    assert report["alerts_vanished"] == 1
+    assert report["alerts"] == 1
+    assert report["postings"] == 2
+
+
+def test_a_transient_fetch_failure_fails_the_pass_instead_of_skipping() -> None:
+    """A revoked token is not a deleted message, and skipping it loses mail.
+
+    The first version of the skip caught every exception. Measured in-process:
+    three messages failing on `401 Unauthorized: invalid_grant` gave
+    `alerts_vanished: 3`, `errors: 0`, and the cursor still advanced past all
+    three - permanently, since Gmail's cursor has second precision. The pass has
+    to fail so the cursor is never written and the window is retried.
+    """
+    campaign = seed_campaign("alerts-revoked@example.test")
+    seeker_id = campaign["seeker_id"]
+
+    class _RevokedMailbox:
+        def list_message_ids(self, query, max_results=50):
+            return ["a", "b"]
+
+        def fetch_raw(self, message_id):
+            raise RuntimeError("401 Unauthorized: invalid_grant")
+
+    with pytest.raises(RuntimeError, match="invalid_grant"):
+        job_alerts.ingest_account(_account(seeker_id), backend=_RevokedMailbox())
+
+
+def test_imap_tells_a_vanished_message_from_a_busy_server() -> None:
+    """The decision that loses mail when it is wrong, made where the server's
+    own words are still in hand.
+
+    An earlier version raised `RuntimeError(f"...failed: {typ}")` and discarded
+    the response text, so `NO [UNAVAILABLE] Server busy` reached the caller as
+    the same string as a deleted message: it was skipped, counted as vanished,
+    and the cursor moved past it. A transient refusal cost real alerts.
+
+    `OK` with no untagged FETCH response is the RFC 3501 6.4.8 shape for a uid
+    that no longer exists, and `imaplib` returns it as `("OK", [None])`. The
+    earlier version re-raised on that one, aborting the pass on the standard
+    case it was written to survive.
+    """
+
+    class _FakeClient:
+        def __init__(self, typ, payload):
+            self.typ, self.payload = typ, payload
+
+        def uid(self, *_args):
+            return self.typ, self.payload
+
+    gone = [
+        ("OK", [None]),                                    # RFC 3501 vanished uid
+        ("NO", [b"[CLIENTBUG] FETCH Bad sequence"]),       # Yahoo's wording
+        ("NO", [b"message not found"]),                    # NO with no code
+    ]
+    transient = [
+        ("NO", [b"[UNAVAILABLE] Server busy"]),
+        ("NO", [b"[OVERQUOTA] over quota"]),
+        ("NO", [b"[INUSE] mailbox locked"]),
+        ("BAD", [b"Command Argument Error"]),
+    ]
+
+    def _classify(typ, payload):
+        mailbox = job_alerts.ImapAlertMailbox.__new__(job_alerts.ImapAlertMailbox)
+        mailbox._client = _FakeClient(typ, payload)
+        try:
+            mailbox.fetch_raw(b"1")
+        except job_alerts.MessageGone:
+            return "gone"
+        except Exception:
+            return "transient"
+        return "read"
+
+    assert [_classify(*c) for c in gone] == ["gone"] * len(gone)
+    assert [_classify(*c) for c in transient] == ["transient"] * len(transient)
+
+
+def test_the_server_text_survives_the_raise() -> None:
+    """The text is the only thing that distinguishes the two cases, so losing it
+    is what made the earlier version unfixable."""
+    mailbox = job_alerts.ImapAlertMailbox.__new__(job_alerts.ImapAlertMailbox)
+
+    class _Busy:
+        def uid(self, *_a):
+            return "NO", [b"[UNAVAILABLE] Server busy, try again"]
+
+    mailbox._client = _Busy()
+    with pytest.raises(Exception) as caught:
+        mailbox.fetch_raw(b"1")
+    assert "UNAVAILABLE" in str(caught.value)
+    assert not isinstance(caught.value, job_alerts.MessageGone)
+
+
+def test_every_counter_in_the_report_reaches_the_totals() -> None:
+    """`alerts_without_postings` is the alarm the module promises for a changed
+    alert layout, and the scheduler logs `ingest_all`'s totals - not the
+    per-account report. Leaving it out of the roll-up made the alarm invisible
+    in the one place it matters."""
+    campaign = seed_campaign("alerts-counters@example.test")
+    seeker_id = campaign["seeker_id"]
+    mailbox = FakeMailbox({
+        "m1": _message("LinkedIn <jobalerts-noreply@linkedin.com>", LINKEDIN_HTML),
+    })
+    report = job_alerts.ingest_account(_account(seeker_id), backend=mailbox)
+
+    import inspect
+    source = inspect.getsource(job_alerts.ingest_all)
+    aggregated = {k for k in report if k != "account_id" and f'"{k}"' in source}
+    missing = {k for k in report if k != "account_id"} - aggregated
+    assert not missing, f"these counters never reach the totals: {sorted(missing)}"
+
+
+# --- the canonical URL is on a host the source really publishes on ---------------
+
+def _glassdoor():
+    return next(s for s in job_alerts.ALERT_SOURCES if s.key == "alert.glassdoor")
+
+
+@pytest.mark.parametrize(
+    ("label", "href"),
+    [
+        (
+            "tracked redirector",
+            "https://click.tracker.example/r?u=https://www.glassdoor.be"
+            "/partner/jobListing.htm?jobListingId=1009123456&src=mail",
+        ),
+        ("direct", "https://www.glassdoor.be/partner/jobListing.htm?jobListingId=1009123456"),
+    ],
+)
+def test_a_tracked_alert_link_resolves_to_the_posting_host(label: str, href: str) -> None:
+    """The host comes from the source's own domain inside the href.
+
+    Glassdoor alerts commonly route links through a redirector, and the link
+    pattern matches the glassdoor host *inside* the URL.  Reading the host from
+    the href's netloc instead synthesised the posting URL on the redirector's
+    host - a dead link that looks canonical.
+    """
+    assert job_alerts._posting_url(_glassdoor(), href, "1009123456") == (
+        "https://www.glassdoor.be/partner/jobListing.htm?jobListingId=1009123456"
+    )
+
+
+def test_an_href_with_no_posting_host_never_yields_a_third_party_url() -> None:
+    """A spoofed or rewritten link falls back to the sender domain, not to its own host."""
+    href = "https://evil.example/partner/jobListing.htm?jobListingId=1009123456"
+    url = job_alerts._posting_url(_glassdoor(), href, "1009123456")
+    assert "evil.example" not in url
+    assert url == "https://glassdoor.com/partner/jobListing.htm?jobListingId=1009123456"

@@ -827,8 +827,10 @@ to be worth reading.
 **Isolation (FR-101, FR-344).** Private tables carry a job-seeker id and every
 query filters on it; the shared knowledge base carries **no link back** to the
 job seeker whose campaign produced them, so erasing a seeker leaves the market
-data standing. The division is maintained by the schema itself: today 49 tables
-are seeker-scoped and 37 are shared, with `contact` the one restricted table
+data standing. The division is maintained by the schema itself: of the 90 logical
+tables, 48 carry `job_seeker_id` and are seeker-scoped and 39 are shared (the
+remaining three being the migration ledger and the two FTS5 search tables), with
+`contact` the one restricted table
 that straddles the boundary depending on how the row was collected.
 
 > **Open item.** An administrator is itself a job seeker row and can read any

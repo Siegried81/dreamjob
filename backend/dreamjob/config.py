@@ -82,6 +82,17 @@ class Settings(BaseSettings):
     llm_scored_limit: int = Field(500, alias="DREAMJOB_LLM_SCORED_LIMIT")
     llm_cost_per_1m_input_eur: float = Field(0.25, alias="DREAMJOB_LLM_COST_PER_1M_INPUT_EUR")
     llm_cost_per_1m_output_eur: float = Field(1.00, alias="DREAMJOB_LLM_COST_PER_1M_OUTPUT_EUR")
+    # The fallback endpoint is priced separately from the main one, and the
+    # default is deliberately non-zero.  The main endpoint is a free tier, so
+    # its rates are legitimately set to 0; sharing one rate pair between the
+    # two means every paid fallback call is debited at the free rate and the
+    # call log reports 0.00 EUR for spend that actually happened.
+    fallback_llm_cost_per_1m_input_eur: float = Field(
+        0.25, alias="DREAMJOB_FALLBACK_LLM_COST_PER_1M_INPUT_EUR"
+    )
+    fallback_llm_cost_per_1m_output_eur: float = Field(
+        1.00, alias="DREAMJOB_FALLBACK_LLM_COST_PER_1M_OUTPUT_EUR"
+    )
 
     # --- Mail (FR-325) -----------------------------------------------------
     mail_backend: str = Field("resend", alias="DREAMJOB_MAIL_BACKEND")
@@ -138,8 +149,8 @@ class Settings(BaseSettings):
     # How often the scheduler re-reads the ATS boards of companies already in
     # someone's ranked list (pipeline/vacancy_refresh.py); 0 turns it off.
     vacancy_refresh_seconds: int = Field(600, alias="DREAMJOB_VACANCY_REFRESH_SECONDS")
-    # How often connected Gmail mailboxes are read for LinkedIn / ictjob.be
-    # job-alert e-mails (mail/job_alerts.py); 0 turns it off.
+    # How often connected Gmail mailboxes are read for the job-alert e-mails of
+    # the senders in mail/job_alerts.py ALERT_SOURCES; 0 turns it off.
     job_alerts_seconds: int = Field(900, alias="DREAMJOB_JOB_ALERTS_SECONDS")
     # A non-Gmail mailbox read for job alerts over IMAP with an app password
     # (Yahoo: Account security -> Generate app password).  The alerts go to the
