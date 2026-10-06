@@ -18,7 +18,11 @@ Pillow>=10.3
 jinja2>=3.1
 
 # --- Parsing ---------------------------------------------------------------
-selectolax>=0.3.21
+# CAPPED: selectolax 1.0 removed the Modest backend this code imports
+# (`from selectolax.parser import HTMLParser` raises ImportError, telling the
+# caller to use LexborHTMLParser).  Raising the cap means porting every HTML
+# adapter to the Lexbor parser first.
+selectolax>=0.3.21,<1.0
 lxml>=5.2
 
 # --- Browser automation (FR-201) -------------------------------------------

@@ -878,6 +878,11 @@ def test_follow_up_falls_due_and_threads_under_the_original(world):
     from dreamjob.mail import dispatcher
 
     dispatcher.set_follow_up_days(5)
+    # The whole test runs on one fixed timeline.  Every moment that matters is
+    # passed in, including to the two `due_follow_ups` queries below: reading
+    # the real clock there made the test a time bomb, because the follow-up
+    # falls due five days after a fixed send date and "nothing is due yet"
+    # stopped holding once that date passed.
     sent = dispatcher.send_package(
         world["package_id"],
         world["seeker_id"],
@@ -887,15 +892,19 @@ def test_follow_up_falls_due_and_threads_under_the_original(world):
     parent = repo.get_dispatch(sent["dispatch_id"], world["seeker_id"])
     assert parent["follow_up_due_at"]
 
-    # Nothing is due yet.
-    assert dispatcher.due_follow_ups(world["seeker_id"]) == []
+    # Nothing is due yet: the day after the send, against a 5-day follow-up.
+    assert dispatcher.due_follow_ups(
+        world["seeker_id"], now=datetime(2026, 9, 10, 7, 30, tzinfo=UTC)
+    ) == []
 
     update_row(
         "dispatch",
         sent["dispatch_id"],
-        {"follow_up_due_at": (datetime.now(UTC) - timedelta(days=1)).isoformat()},
+        {"follow_up_due_at": datetime(2026, 9, 9, 7, 0, tzinfo=UTC).isoformat()},
     )
-    due = dispatcher.due_follow_ups(world["seeker_id"])
+    due = dispatcher.due_follow_ups(
+        world["seeker_id"], now=datetime(2026, 9, 9, 7, 40, tzinfo=UTC)
+    )
     assert [d["id"] for d in due] == [sent["dispatch_id"]]
 
     # No LLM is reachable in the test environment, so the template is used.
