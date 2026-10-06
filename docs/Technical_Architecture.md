@@ -58,7 +58,7 @@ of taking those constraints seriously rather than working around them.
 ├───────────────┴──────────────┴───────────────┴──────────────┴────────┤
 │  Repositories    the only place SQL is written                       │
 ├──────────────────────────────────────────────────────────────────────┤
-│  SQLite (WAL)    87 tables · 144 indexes │  Filesystem: raw docs,    │
+│  SQLite (WAL)    99 tables · 157 indexes │  Filesystem: raw docs,    │
 │  private ▸ seeker, per query            │  generated CVs and PDFs,   │
 │  shared  ▸ knowledge base, no link back │  uploads, exports          │
 └──────────────────────────────────────────────────────────────────────┘
@@ -67,9 +67,11 @@ of taking those constraints seriously rather than working around them.
    (or local)     ATS / sites     NBB, KBO…     Resend
 ```
 
-**Scale.** 219 Python modules / 110,773 lines · 140 JS modules / 40,650 lines ·
-94 test files / 51,165 lines · **1,725 tests pass offline** · 34 migrations ·
-24 versioned prompt templates · 29 source adapters.
+**Scale** (re-derived 2026-10-06; `backend/**/*.py`, `frontend/**/*.{js,jsx}`,
+`tests/**/*.py`). 237 Python modules / 123,729 lines · 143 JS modules /
+44,424 lines · 126 test files / 64,624 lines · 43 migrations · 24 versioned
+prompt templates · 35 declared source adapters, 29 of them enabled. The
+offline pass count is in `README.md`, which is where it is re-derived.
 
 ---
 
@@ -104,8 +106,9 @@ at the boundary. Migrations are forward-only `NNN_name.sql` files with a
 recorded checksum; editing an applied migration is a warning, not a silent
 divergence.
 
-**Schema shape.** 87 logical tables across 34 migrations — 49 seeker-scoped, 37
-shared, one migration ledger, and two FTS5 virtual tables — plus a
+**Schema shape.** 90 logical tables across 43 migrations — 48 seeker-scoped, 39
+shared, one migration ledger, and two FTS5 virtual tables; the nine FTS5 shadow
+tables take `sqlite_master` to 99 — plus a
 `usable_contact` view that encodes the objection rule at the database:
 
 - **Private** — carry `job_seeker_id`: profile and versions, conflicts, skills,
@@ -386,7 +389,7 @@ profiled as if it were the client.
 
 | Requirement | Approach |
 |---|---|
-| NFR-101 interactive views < 2s at p95 | 144 indexes; FTS5 for search; deterministic pre-rank avoids an LLM call per row; lazy routes keep first paint small |
+| NFR-101 interactive views < 2s at p95 | 157 indexes; FTS5 for search; deterministic pre-rank avoids an LLM call per row; lazy routes keep first paint small |
 | NFR-102 ≥20 concurrent HTTP workers, serialised writes | Semaphore-bounded async egress; one global write lock under WAL |
 | NFR-103 typical campaign < 4 hours | Caps bound the work; ATS JSON is cheap; **not yet measured against a real campaign** |
 | NFR-104 bounded LLM spend | Pre-flight check, post-call debit, graceful degradation |
@@ -396,10 +399,12 @@ profiled as if it were the client.
 
 ## 9. Testing
 
-**1,725 tests in the offline suite, 51,165 lines across 94 files.** Each runs
-against a migrated temporary database and without network access; LLM and HTTP
-paths are stubbed or skipped, and the network and load tests are deselected
-(`-m 'not llm and not load'`). A Playwright e2e harness and persona generator
+**2,240 tests collected, 64,624 lines across 126 files** (`tests/**/*.py`,
+re-counted 2026-10-06; `-m 'not llm and not load'` deselects 14, leaving 2,226.
+The offline pass count is in `README.md`, which is where it is re-derived).
+Each runs against a migrated temporary database and without network access; LLM
+and HTTP paths are stubbed or skipped, and the network and load tests are
+deselected. A Playwright e2e harness and persona generator
 live under `tests/e2e` for the flows that need a browser.
 
 The tests worth naming are the ones that encode a requirement rather than a

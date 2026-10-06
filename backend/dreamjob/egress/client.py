@@ -300,10 +300,29 @@ class _CacheEntry:
     expires_at: str
     content_hash: str | None
     raw_document_id: str | None
+    #: When the body was last fetched or revalidated.  ``None`` on a row written
+    #: before the column was read here, which :meth:`older_than` treats as old.
+    fetched_at: str | None = None
 
     @property
     def fresh(self) -> bool:
         return self.expires_at > utcnow()
+
+    def older_than(self, max_age: int | None) -> bool:
+        """Was this entry fetched more than ``max_age`` seconds ago?
+
+        ``expires_at`` is fixed when the entry is written, from the TTL of the
+        client that wrote it, so a vacancy board stored by a 24-hour client
+        would stay "fresh" for a day.  A caller that needs a shorter freshness
+        window passes ``max_age`` and this check applies it on read, whatever
+        TTL the entry was stored with.  ``None`` means "no extra limit".
+        """
+        if max_age is None:
+            return False
+        if not self.fetched_at:
+            return True
+        cutoff = (datetime.now(UTC) - timedelta(seconds=max_age)).isoformat(timespec="seconds")
+        return self.fetched_at < cutoff
 
     @property
     def negative(self) -> bool:
@@ -560,6 +579,7 @@ class EgressClient:
             # readable rather than crashing every fetch on it.
             content_hash=row.get("content_hash"),
             raw_document_id=row.get("raw_document_id"),
+            fetched_at=row.get("fetched_at"),
         )
 
     def _serve(self, entry: _CacheEntry, url: str) -> FetchResult | None:
@@ -846,6 +866,7 @@ class EgressClient:
         access_method: str = "http",
         max_retries: int = 3,
         respect_robots: bool | None = None,
+        max_age: int | None = None,
         **kwargs: object,
     ) -> FetchResult:
         """Fetch ``url`` once - however many callers ask for it at once.
@@ -854,6 +875,12 @@ class EgressClient:
         single-flight map and ``http_cache`` agree on identity before anything
         fans out (FR-182).  Concurrent GETs of one URL share one response; the
         second caller costs no request, no rate-limit slot and no bytes.
+
+        ``max_age`` caps how old a cached body may be before it is revalidated,
+        on top of the stored expiry (see :meth:`_CacheEntry.older_than`).  It is
+        how a vacancy source gets a short freshness window while registries and
+        filings keep the long default: same cache, a different question per
+        caller.  A revalidation of an unchanged board is a 304 and costs no body.
         """
         # A GET, and a read-like POST (a search endpoint), are both cacheable;
         # the key carries the body so two searches are two representations.
@@ -886,7 +913,8 @@ class EgressClient:
         try:
             result = await self._fetch_cached(
                 url, key, method=method_upper, access_method=access_method,
-                max_retries=max_retries, respect_robots=respect_robots, **kwargs
+                max_retries=max_retries, respect_robots=respect_robots,
+                max_age=max_age, **kwargs
             )
         except BaseException as exc:
             future.set_exception(exc)
@@ -905,10 +933,14 @@ class EgressClient:
         method: str = "GET",
         access_method: str,
         max_retries: int,
+        max_age: int | None = None,
         **kwargs: object,
     ) -> FetchResult:
         entry = self._cache_entry(key)
-        if entry and entry.fresh:
+        # ``max_age`` only shortens the life of a stored body.  A remembered
+        # 404 keeps its own negative TTL, or a short vacancy window would
+        # re-probe every closed board on every pass.
+        if entry and entry.fresh and (entry.negative or not entry.older_than(max_age)):
             served = self._serve(entry, url)
             if served is not None:
                 return served

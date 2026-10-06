@@ -23,9 +23,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { api } from '../api/client'
+import { useLiveEvent } from '../api/liveEvents'
 import { Caution, FirstRun, HelpTip, ScreenIntro } from '../components/Help'
 import Icon from '../components/Icon'
 import WorkflowMap from '../components/WorkflowMap'
+import { useSession } from '../session'
 import { EmployerCompanyLine } from './employers'
 import {
   Badge,
@@ -66,6 +68,43 @@ const TAGS = [
 const TIMING_LABELS = { apply_now: 'Apply now', favourable: 'Favourable window' }
 
 const PAGE_SIZE = 50
+
+/** Live arrivals are batched: a recheck can add a dozen rows in a second. */
+const LIVE_REFRESH_MS = 1500
+
+/**
+ * "New since your last visit" is remembered per browser and per account, in
+ * localStorage. Storage can be missing or refuse access (private windows,
+ * blocked site data), so every access is guarded and a failure simply means
+ * nothing is marked.
+ */
+function lastVisitKey(seekerId) {
+  return `dreamjob.opportunities.lastVisit.${seekerId || 'anon'}`
+}
+
+function readLastVisit(seekerId) {
+  try {
+    const value = window.localStorage.getItem(lastVisitKey(seekerId))
+    return value && Number.isFinite(Date.parse(value)) ? value : null
+  } catch {
+    return null
+  }
+}
+
+function writeLastVisit(seekerId, iso) {
+  try {
+    window.localStorage.setItem(lastVisitKey(seekerId), iso)
+  } catch {
+    /* unavailable storage only costs the marker */
+  }
+}
+
+/** True when the row was created after the previous visit (never on a first visit). */
+function isNewSince(item, lastVisit) {
+  if (!lastVisit || !item.created_at) return false
+  const created = Date.parse(item.created_at)
+  return Number.isFinite(created) && created > Date.parse(lastVisit)
+}
 
 /** The autopilot's stages, in the words a job seeker would use (FR-162). */
 const AUTOPILOT_STAGE = {
@@ -390,6 +429,8 @@ function FilterBar({ facets, filters, onChange, onReset }) {
 
 function OpportunityRow({
   item,
+  isNew,
+  lastVisit,
   expanded,
   onToggleExpand,
   onPatch,
@@ -467,6 +508,18 @@ function OpportunityRow({
             </Link>
             {/* FR-263: the distinction is a component, never an ad-hoc label. */}
             <KindBadge kind={item.kind} />
+            {isNew && (
+              <span
+                className="opp-new"
+                title={
+                  lastVisit
+                    ? `Found since your last visit (${formatDate(lastVisit)})`
+                    : 'Found while this page was open'
+                }
+              >
+                New
+              </span>
+            )}
             {/* A published posting that names no role. Real, but not a specific
                 job, so it is called out rather than left to look like one. */}
             {item.open_application && (
@@ -785,6 +838,21 @@ export default function OpportunitiesPage() {
   // so the screen opens on the filter it was asked for rather than on everything.
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
+  const { session } = useSession()
+
+  // The previous visit is read once, before this visit overwrites it, so the
+  // markers stay put for as long as the page is open.
+  const [lastVisit] = useState(() => readLastVisit(session?.id))
+  useEffect(() => {
+    writeLastVisit(session?.id, new Date().toISOString())
+  }, [session?.id])
+
+  // New vacancies announced by the live stream while the page is open.
+  const [liveNew, setLiveNew] = useState(0)
+  const [liveIds, setLiveIds] = useState(() => new Set())
+  const liveSeenRef = useRef(new Set())
+  const liveTimerRef = useRef(null)
+  const topRef = useRef(null)
 
   const [campaignId, setCampaignId] = useState('')
   const [filters, setFilters] = useState(() => {
@@ -1001,6 +1069,46 @@ export default function OpportunitiesPage() {
       ),
     [campaignId, selectionNonce],
   )
+
+  // Refresh the rows in place when a new vacancy joins the ranked list. The
+  // fetch goes around `list.reload()` on purpose: a reload swaps the list for
+  // a skeleton, which would close an expanded row under the seeker's cursor.
+  // A drag in progress is never refreshed under; the refresh waits for it.
+  const queryRef = useRef(query)
+  queryRef.current = query
+  const dragRef = useRef(null)
+  dragRef.current = dragId
+
+  function refreshLive() {
+    clearTimeout(liveTimerRef.current)
+    liveTimerRef.current = setTimeout(async () => {
+      if (dragRef.current) return refreshLive()
+      const asked = queryRef.current
+      try {
+        const next = await api.get(`/opportunities?${asked}`)
+        if (asked === queryRef.current) list.setData(next)
+      } catch {
+        /* the next arrival, or any reload, tries again */
+      }
+    }, LIVE_REFRESH_MS)
+  }
+
+  useEffect(() => () => clearTimeout(liveTimerRef.current), [])
+
+  useLiveEvent('notification', (n) => {
+    if (!n || n.kind !== 'new_vacancy' || n.id == null) return
+    if (liveSeenRef.current.has(n.id)) return
+    liveSeenRef.current.add(n.id)
+    setLiveNew((c) => c + 1)
+    const oppId = n.payload?.opportunity_id
+    if (oppId) setLiveIds((ids) => new Set(ids).add(oppId))
+    refreshLive()
+  })
+
+  function showLiveNew() {
+    setLiveNew(0)
+    topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   const items = list.data?.items ?? []
   const total = list.data?.total ?? 0
@@ -1368,7 +1476,15 @@ export default function OpportunitiesPage() {
   }, [recalculating, campaignId])
 
   return (
-    <div className="content-wide">
+    <div className="content-wide" ref={topRef}>
+      {liveNew > 0 && (
+        <button type="button" className="opp-live-new" onClick={showLiveNew}>
+          <Icon name="refresh" />
+          {liveNew === 1
+            ? '1 new opportunity since you opened this page'
+            : `${liveNew} new opportunities since you opened this page`}
+        </button>
+      )}
       <WorkflowMap journey={journey.data?.journey || {}} compact current="opportunities" />
       <ScreenIntro pathname="/opportunities" />
 
@@ -1798,6 +1914,8 @@ export default function OpportunitiesPage() {
             <OpportunityRow
               key={item.id}
               item={item}
+              isNew={liveIds.has(item.id) || isNewSince(item, lastVisit)}
+              lastVisit={lastVisit}
               expanded={expanded === item.id}
               onToggleExpand={(id) => setExpanded((e) => (e === id ? null : id))}
               onPatch={patch}

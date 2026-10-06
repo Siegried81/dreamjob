@@ -14,7 +14,8 @@
  * its status line is visible from every other tab.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
 import { api } from '../api/client'
 import { FirstRun, ScreenIntro } from '../components/Help'
@@ -28,9 +29,20 @@ import Timing from './monitoring/Timing'
 import Watchlist from './monitoring/Watchlist'
 import { AddWatchModal } from './monitoring/WatchModals'
 
+const TAB_KEYS = ['watchlist', 'notifications', 'timing', 'digest', 'scheduler']
+
 export default function MonitoringPage() {
   const { session } = useSession()
-  const [tab, setTab] = useState('watchlist')
+  // `?tab=` lets the top-bar bell open straight onto the notifications.
+  const [searchParams] = useSearchParams()
+  const [tab, setTab] = useState(() =>
+    TAB_KEYS.includes(searchParams.get('tab')) ? searchParams.get('tab') : 'watchlist',
+  )
+  // Clicking the bell while already here changes only the query string.
+  const tabParam = searchParams.get('tab')
+  useEffect(() => {
+    if (TAB_KEYS.includes(tabParam)) setTab(tabParam)
+  }, [tabParam])
   const [adding, setAdding] = useState(false)
 
   const watchlist = useFetch(() => api.get('/monitoring/watchlist'))

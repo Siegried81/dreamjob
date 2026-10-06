@@ -40,6 +40,25 @@ class Settings(BaseSettings):
     # --- LLM (CR-409) ------------------------------------------------------
     llm_provider: str = Field("deepseek", alias="DREAMJOB_LLM_PROVIDER")
     deepseek_api_key: str = Field("", alias="DEEPSEEK_API_KEY")
+    # Extra keys for the same OpenAI-compatible endpoint.  A free tier (Groq)
+    # rate-limits each key per minute, so the client moves to the next key on
+    # a 429 instead of sleeping; see ``deepseek_api_keys``.
+    deepseek_api_key_2: str = Field("", alias="DEEPSEEK_API_KEY_2")
+    deepseek_api_key_3: str = Field("", alias="DEEPSEEK_API_KEY_3")
+    deepseek_api_key_4: str = Field("", alias="DEEPSEEK_API_KEY_4")
+    deepseek_api_key_5: str = Field("", alias="DEEPSEEK_API_KEY_5")
+    # A second OpenAI-compatible endpoint tried only when the main one still
+    # fails after all its keys and retries (e.g. Groq first, DeepSeek behind
+    # it).  No key = no fallback.  deepseek-chat for both roles by default: it
+    # is the cheaper model, and the fallback exists to keep a call alive.
+    fallback_llm_base_url: str = Field(
+        "https://api.deepseek.com", alias="DREAMJOB_FALLBACK_LLM_BASE_URL"
+    )
+    fallback_llm_api_key: str = Field("", alias="DREAMJOB_FALLBACK_LLM_API_KEY")
+    fallback_llm_model_cheap: str = Field("deepseek-chat", alias="DREAMJOB_FALLBACK_LLM_MODEL_CHEAP")
+    fallback_llm_model_strong: str = Field(
+        "deepseek-chat", alias="DREAMJOB_FALLBACK_LLM_MODEL_STRONG"
+    )
     deepseek_base_url: str = Field("https://api.deepseek.com", alias="DEEPSEEK_BASE_URL")
     llm_model_cheap: str = Field("deepseek-chat", alias="DREAMJOB_LLM_MODEL_CHEAP")
     llm_model_strong: str = Field("deepseek-reasoner", alias="DREAMJOB_LLM_MODEL_STRONG")
@@ -63,6 +82,17 @@ class Settings(BaseSettings):
     llm_scored_limit: int = Field(500, alias="DREAMJOB_LLM_SCORED_LIMIT")
     llm_cost_per_1m_input_eur: float = Field(0.25, alias="DREAMJOB_LLM_COST_PER_1M_INPUT_EUR")
     llm_cost_per_1m_output_eur: float = Field(1.00, alias="DREAMJOB_LLM_COST_PER_1M_OUTPUT_EUR")
+    # The fallback endpoint is priced separately from the main one, and the
+    # default is deliberately non-zero.  The main endpoint is a free tier, so
+    # its rates are legitimately set to 0; sharing one rate pair between the
+    # two means every paid fallback call is debited at the free rate and the
+    # call log reports 0.00 EUR for spend that actually happened.
+    fallback_llm_cost_per_1m_input_eur: float = Field(
+        0.25, alias="DREAMJOB_FALLBACK_LLM_COST_PER_1M_INPUT_EUR"
+    )
+    fallback_llm_cost_per_1m_output_eur: float = Field(
+        1.00, alias="DREAMJOB_FALLBACK_LLM_COST_PER_1M_OUTPUT_EUR"
+    )
 
     # --- Mail (FR-325) -----------------------------------------------------
     mail_backend: str = Field("resend", alias="DREAMJOB_MAIL_BACKEND")
@@ -96,6 +126,11 @@ class Settings(BaseSettings):
         alias="DREAMJOB_USER_AGENT",
     )
     http_cache_ttl_seconds: int = Field(86_400, alias="DREAMJOB_HTTP_CACHE_TTL_SECONDS")
+    # Vacancy sources (ATS boards, job boards) change within the hour while
+    # registries and filings change yearly, so one TTL for both either serves
+    # day-old postings or re-reads accounts for nothing.  Vacancy fetches pass
+    # this as ``max_age``; an unchanged board revalidates as a 304.
+    vacancy_cache_ttl_seconds: int = Field(3_600, alias="DREAMJOB_VACANCY_CACHE_TTL_SECONDS")
     per_domain_rps: float = Field(0.5, alias="DREAMJOB_PER_DOMAIN_RPS")
     http_max_concurrency: int = Field(20, alias="DREAMJOB_HTTP_MAX_CONCURRENCY")
     # NFR-102: how many background jobs may hold a worker thread at once, and
@@ -111,6 +146,21 @@ class Settings(BaseSettings):
     # default and can be turned off for an external `--once` cron, or in tests.
     scheduler_enabled: bool = Field(True, alias="DREAMJOB_SCHEDULER_ENABLED")
     scheduler_tick_seconds: int = Field(60, alias="DREAMJOB_SCHEDULER_TICK_SECONDS")
+    # How often the scheduler re-reads the ATS boards of companies already in
+    # someone's ranked list (pipeline/vacancy_refresh.py); 0 turns it off.
+    vacancy_refresh_seconds: int = Field(600, alias="DREAMJOB_VACANCY_REFRESH_SECONDS")
+    # How often connected Gmail mailboxes are read for the job-alert e-mails of
+    # the senders in mail/job_alerts.py ALERT_SOURCES; 0 turns it off.
+    job_alerts_seconds: int = Field(900, alias="DREAMJOB_JOB_ALERTS_SECONDS")
+    # A non-Gmail mailbox read for job alerts over IMAP with an app password
+    # (Yahoo: Account security -> Generate app password).  The alerts go to the
+    # account whose login e-mail is ``alerts_imap_user``.  Empty = off.
+    alerts_imap_host: str = Field("imap.mail.yahoo.com", alias="DREAMJOB_ALERTS_IMAP_HOST")
+    alerts_imap_user: str = Field("", alias="DREAMJOB_ALERTS_IMAP_USER")
+    alerts_imap_password: str = Field("", alias="DREAMJOB_ALERTS_IMAP_PASSWORD")
+    # The account the mailbox's alerts belong to, when its login e-mail is not
+    # the mailbox address.  Empty = the account that logs in as alerts_imap_user.
+    alerts_imap_owner: str = Field("", alias="DREAMJOB_ALERTS_IMAP_OWNER")
     job_io_threads: int = Field(8, alias="DREAMJOB_JOB_IO_THREADS")
     # How long a writer waits for the single writer (CR-408) before giving up.
     # A request is impatient because a person is waiting and an error beats a
@@ -134,6 +184,12 @@ class Settings(BaseSettings):
     # robots.txt says how fast as well as whether (FR-182): europa.eu asks for
     # 10 s, api.lever.co for 1 s.  Off is for tests that must not sleep.
     honour_crawl_delay: bool = Field(True, alias="DREAMJOB_HONOUR_CRAWL_DELAY")
+    # Adzuna's job-search API is free but keyed (developer.adzuna.com).  With
+    # either value empty, board.adzuna stays catalogued but inert: the planner
+    # leaves it out with the reason, as it does a registry without its key
+    # (FR-245).  The pair is sent as query parameters, never in the stored URL.
+    adzuna_app_id: str = Field("", alias="DREAMJOB_ADZUNA_APP_ID")
+    adzuna_app_key: str = Field("", alias="DREAMJOB_ADZUNA_APP_KEY")
 
     # --- Browser automation (FR-201..208) ----------------------------------
     cdp_url: str = Field("http://127.0.0.1:9222", alias="DREAMJOB_CDP_URL")
@@ -172,6 +228,17 @@ class Settings(BaseSettings):
         return v
 
     # --- Derived helpers ---------------------------------------------------
+    @property
+    def deepseek_api_keys(self) -> list[str]:
+        """Every configured key for the main LLM endpoint, in order, without repeats."""
+        keys: list[str] = []
+        for key in (self.deepseek_api_key, self.deepseek_api_key_2, self.deepseek_api_key_3,
+                    self.deepseek_api_key_4, self.deepseek_api_key_5):
+            key = (key or "").strip()
+            if key and key not in keys:
+                keys.append(key)
+        return keys
+
     @property
     def abs_data_dir(self) -> Path:
         p = self.data_dir

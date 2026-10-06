@@ -532,6 +532,23 @@ class GmailBackend(MailBackend):
                     params={"format": "raw"},
                 )
             resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # A 404 means the message is gone, not that Gmail is unreachable, and
+            # the caller's decision differs: a gone message is skipped and the
+            # cursor moves past it, while an unreachable mailbox must fail the
+            # pass so the window is retried. Wrapping both in
+            # MailBackendUnavailable made the distinction unrecoverable - the
+            # class name itself contains "unavailable", so a caller matching on
+            # the text read every deleted message as a transient failure and
+            # aborted the whole pass. Imported locally to keep mail.gmail free
+            # of an import cycle with mail.job_alerts.
+            if exc.response.status_code == 404:
+                from dreamjob.mail.job_alerts import MessageGone
+
+                raise MessageGone(
+                    f"Gmail message {gmail_id} no longer exists: {exc}"
+                ) from exc
+            raise MailBackendUnavailable(f"Gmail fetch failed for {gmail_id}: {exc}") from exc
         except httpx.HTTPError as exc:
             raise MailBackendUnavailable(f"Gmail fetch failed for {gmail_id}: {exc}") from exc
         raw = resp.json().get("raw", "")

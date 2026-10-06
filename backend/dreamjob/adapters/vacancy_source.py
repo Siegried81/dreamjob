@@ -37,6 +37,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from dreamjob.adapters.base import NormalisedRecord, PlanItem, RawRecord, SourceAdapter
+from dreamjob.config import get_settings
 from dreamjob.db.connection import upsert_row, utcnow
 from dreamjob.egress.client import FetchResult, RateLimited, RobotsDisallowed
 from dreamjob.llm.client import LLMClient
@@ -1007,9 +1008,15 @@ class VacancySourceAdapter(SourceAdapter):
         dead page does not abort a walk over many - but the failure is recorded
         on :attr:`fetch_outcome`, and :meth:`settle` raises when the walk ends
         with nothing.  A ``log.info`` is not a failure report.
+
+        Every vacancy request carries ``max_age`` from
+        ``DREAMJOB_VACANCY_CACHE_TTL_SECONDS``: postings go stale in hours, so a
+        cached board older than that is revalidated instead of served, while the
+        rest of the cache keeps the long general TTL.
         """
         if self.egress is None:
             raise RuntimeError(f"[{self.key}] fetch() needs an EgressClient (IR-102)")
+        kwargs.setdefault("max_age", get_settings().vacancy_cache_ttl_seconds)
         outcome = self.fetch_outcome
         outcome.requests += 1
         try:

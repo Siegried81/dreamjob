@@ -2242,3 +2242,111 @@ button.chip { font: inherit; font-size: 12px; cursor: pointer; }
 /* An empty feed is not a failure: a run from before the activity columns
    existed has nothing to report, and says so quietly rather than in red. */
 .cmp-activity .log-msg.is-quiet { color: var(--ink-2); }
+
+/* --- Live updates --------------------------------------------------------- */
+
+/* The unread bell sits with the counters; the count only appears when there
+   is something to read, so a quiet inbox leaves a quiet header. */
+.topbar-bell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  color: var(--ink-3);
+  text-decoration: none;
+}
+
+.topbar-bell:hover { background: var(--surface-sunk); color: var(--ink); }
+.topbar-bell.has-unread { color: var(--ink); }
+.topbar-bell .icon { font-size: 15px; }
+
+.topbar-bell-count {
+  position: absolute;
+  top: -1px;
+  right: -4px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* New-vacancy toasts: bottom right, under the help drawer, a few at most. */
+.live-toasts {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 340px;
+  max-width: calc(100vw - 36px);
+}
+
+.live-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--phase-3);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-lift);
+  font-size: 13px;
+  animation: slide-in 0.18s ease;
+}
+
+.live-toast-icon { color: var(--phase-3); font-size: 15px; padding-top: 2px; }
+.live-toast-title { font-weight: 600; color: var(--ink); margin: 1px 0 3px; overflow-wrap: anywhere; }
+
+/* "N new since you opened this page": sticks to the top while scrolling. */
+.opp-live-new {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 auto 12px;
+  padding: 5px 13px;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+.opp-live-new:hover { border-color: var(--accent); }
+
+/* Found since the last visit: a quiet marker beside the title, nothing more. */
+.opp-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.opp-new::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}

@@ -129,6 +129,10 @@ SECONDS_PER_PAGE_OVERHEAD = 4          # HTML and browser sources
 SECONDS_PER_PAGE_OVERHEAD_API = 1      # JSON APIs (ATS, EURES, Arbeitnow)
 DETERMINISTIC_ADAPTER_PREFIXES = (     # 0 LLM tokens in estimate()
     "ats.", "board.eures", "board.actiris", "board.arbeitnow",
+    # The public JSON feeds (adapters/jobboards/_json_feed.py), all parsed
+    # field by field with llm_fallback = False.
+    "board.remotive", "board.remoteok", "board.jobicy", "board.himalayas",
+    "board.hn_hiring", "board.adzuna",
 )
 
 # The review screen never renders a plan item by item: a Campaign A plan is

@@ -122,9 +122,11 @@ than aspirational:
 | employer-kind verdict | `pipeline/employer_resolver.py` | no verdict without evidence |
 | company-domain decision | `pipeline/company_domains.py` | a namesake domain is refused, visibly |
 
-**Scale:** 219 Python modules / 110,773 lines · 140 JS modules / 40,650 lines ·
-94 test files / 51,165 lines · **1,725 tests pass offline** · 87 tables ·
-144 indexes · 34 migrations · 29 adapters · 24 versioned prompt templates.
+**Scale** (re-derived 2026-10-06; `backend/**/*.py`, `frontend/**/*.{js,jsx}`,
+`tests/**/*.py`): 237 Python modules / 123,729 lines ·
+143 JS modules / 44,424 lines · 126 test files / 64,624 lines ·
+**2,146 of 2,206 tests pass offline** · 99 tables · 157 indexes ·
+43 migrations · 35 adapter modules · 24 versioned prompt templates.
 **156 of 157 requirements (99%)** from the specification are cited in the
 source: 103/104 Must, 44/44 Should, 9/9 Could.
 
@@ -133,15 +135,18 @@ source: 103/104 Must, 44/44 Should, 9/9 Could.
 | Type | Count | Sources |
 |---|---|---|
 | ATS | 9 | Greenhouse, Lever, SmartRecruiters, Ashby, Recruitee, Personio, Workday, Teamtailor, Workable |
-| Job boards | 9 | EURES, VDAB, Actiris, Jobat, StepStone, Indeed, Welcome to the Jungle, Arbeitnow, generic HTML |
+| Job boards | 15 | EURES, VDAB, Actiris, Jobat, StepStone, Indeed, Welcome to the Jungle, Arbeitnow, generic HTML, Adzuna, Himalayas, Hacker News "Who is hiring", Jobicy, RemoteOK, Remotive |
 | Registries | 5 | NBB, KBO/BCE, Companies House, KvK, SEC EDGAR |
 | Directories | 1 | OpenCorporates |
 | Website | 1 | bounded company-site crawler |
 | News / events | 3 | RSS newsrooms, event radar, social event calendars |
 | Compensation | 1 | Eurostat Structure of Earnings Survey |
 
+The counts above are rows in `source_catalogue`: **35 declared, 29 enabled**.
 Indeed, StepStone, SmartRecruiters and the social-event adapter ship disabled
-until an administrator acknowledges their terms of service (IR-101).
+until an administrator acknowledges their terms of service (IR-101); `board.jobat`
+is enabled but also awaits that acknowledgement, and `board.generic`,
+`board.vdab` and `board.wttj` are declared and disabled.
 
 **Contact discovery** does not stop at the company home page. It reads the
 pages the home page links to, the site's **sitemap**, **schema.org JSON-LD**
@@ -155,10 +160,11 @@ engines disallow their HTML search endpoint). A blocked site is recorded as
 ### Persistence
 
 SQLite in WAL mode with a deliberate **one-writer** discipline; repositories are
-the only place SQL is written, and return plain dicts. 87 logical tables across
-34 forward-only migrations: 49 seeker-scoped, 37 shared knowledge-base, one
-migration ledger and two FTS5 search tables, plus a `usable_contact` view that
-encodes the objection rule at the database.
+the only place SQL is written, and return plain dicts. 90 logical tables across
+43 forward-only migrations: 48 seeker-scoped (they carry `job_seeker_id`),
+39 shared knowledge-base, one migration ledger and two FTS5 search tables. The
+nine FTS5 shadow tables bring `sqlite_master` to the 99 tables counted above.
+Plus a `usable_contact` view that encodes the objection rule at the database.
 
 ### Security
 
@@ -242,6 +248,22 @@ DREAMJOB_EMBEDDINGS_BASE_URL=...
 python3 scripts/build_semantic_index.py
 ```
 
+**Near-real-time vacancies** — on by default. The scheduler's `vacancy_refresh`
+task runs every 10 minutes (`DREAMJOB_VACANCY_REFRESH_SECONDS`): it re-reads a
+bounded, round-robin slice of the ATS boards behind existing ranked lists, and
+each new posting is added to every following campaign under its directives,
+scored, and announced once as a `new_vacancy` notification. Vacancy fetches
+treat a cached board as fresh for one hour (`DREAMJOB_VACANCY_CACHE_TTL_SECONDS`);
+after that it is revalidated, which costs a 0-byte 304 when nothing changed.
+
+To discover beyond the boards already followed, turn on the continuous cycle in
+**Admin → Continuous** with a 300 s interval. The UI receives updates live
+through `/api/events/stream`.
+
+The scheduler runs inside the API process and stops with it. On Windows, if it
+must survive API restarts, set `DREAMJOB_SCHEDULER_ENABLED=0` and run
+`python -m dreamjob.monitoring.scheduler --once` from Task Scheduler instead.
+
 ---
 
 ## Using it
@@ -278,9 +300,9 @@ can show what is in force. Groups include:
 - **Keys** — `DREAMJOB_MASTER_KEY`, `DREAMJOB_SESSION_SECRET`
 - **LLM** — `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, cheap/strong model names, `DREAMJOB_LOCAL_LLM_*`, `DREAMJOB_EMBEDDINGS_*`, budget and cost
 - **Mail** — `DREAMJOB_MAIL_BACKEND`, `DREAMJOB_MAIL_DRY_RUN`, `GMAIL_*`, `RESEND_API_KEY`, `DREAMJOB_SEND_DAILY_CAP`, send window and interval
-- **Egress** — user agent, per-domain RPS, concurrency, cache and negative-cache TTL, robots and crawl-delay flags, raw-document retention
+- **Egress** — user agent, per-domain RPS, concurrency, cache and negative-cache TTL, `DREAMJOB_VACANCY_CACHE_TTL_SECONDS` (freshness window for vacancy fetches), robots and crawl-delay flags, raw-document retention
 - **Browser** — `DREAMJOB_CDP_URL`, profile directory, human pacing bounds
-- **Scheduler** — `DREAMJOB_SCHEDULER_ENABLED`, `DREAMJOB_SCHEDULER_TICK_SECONDS`
+- **Scheduler** — `DREAMJOB_SCHEDULER_ENABLED`, `DREAMJOB_SCHEDULER_TICK_SECONDS`, `DREAMJOB_VACANCY_REFRESH_SECONDS` (0 turns the vacancy refresh off)
 - **Observability** — log directory, level, format, rotation, slow-request and slow-query thresholds
 
 ---

@@ -18,8 +18,10 @@ import {
 } from 'react-router-dom'
 
 import { api, setUnauthorizedHandler } from './api/client'
+import { closeLiveEvents } from './api/liveEvents'
 import { HelpButton, HelpPanel } from './components/Help'
 import Icon from './components/Icon'
+import { LiveToasts, NotificationBell } from './components/LiveNotifications'
 import TopbarCounters from './components/TopbarCounters'
 import { SessionContext } from './session'
 import SignIn from './pages/SignIn'
@@ -224,6 +226,7 @@ function Shell({ session, onSignOut }) {
           </h2>
           <div className="spacer" />
           <TopbarCounters />
+          <NotificationBell />
           <span className="small muted">{session.email}</span>
           <HelpButton onOpen={() => setHelpOpen(true)} />
           <button className="btn btn-sm btn-ghost" onClick={onSignOut}>
@@ -286,6 +289,7 @@ function Shell({ session, onSignOut }) {
         open={helpOpen}
         onClose={() => setHelpOpen(false)}
       />
+      <LiveToasts />
     </div>
   )
 }
@@ -294,7 +298,12 @@ export default function App() {
   const [session, setSession] = useState(undefined) // undefined = still checking
 
   useEffect(() => {
-    setUnauthorizedHandler(() => setSession(null))
+    // A lapsed session also ends the live stream, so it never retries under a
+    // cookie the backend has already refused.
+    setUnauthorizedHandler(() => {
+      closeLiveEvents()
+      setSession(null)
+    })
     api
       .get('/auth/me')
       .then(setSession)
@@ -305,6 +314,7 @@ export default function App() {
     try {
       await api.post('/auth/logout')
     } finally {
+      closeLiveEvents()
       setSession(null)
     }
   }

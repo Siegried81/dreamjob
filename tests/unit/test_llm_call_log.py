@@ -74,8 +74,14 @@ def _client():
 
     client = LLMClient(job_seeker_id=None)
     # The routing refuses to call a provider with no key, and this test never
-    # reaches a network.
-    client.settings = client.settings.model_copy(update={"deepseek_api_key": "test-key"})
+    # reaches a network.  The token rates are pinned too: they come from .env,
+    # where a free-tier endpoint legitimately sets them to 0, and a test that
+    # asserts on a non-zero cost would then fail for a configuration reason.
+    client.settings = client.settings.model_copy(update={
+        "deepseek_api_key": "test-key",
+        "llm_cost_per_1m_input_eur": 0.25,
+        "llm_cost_per_1m_output_eur": 1.00,
+    })
     return client
 
 
