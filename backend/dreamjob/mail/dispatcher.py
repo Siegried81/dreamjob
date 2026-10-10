@@ -343,10 +343,14 @@ def resolve_backend(job_seeker_id: str, backend_key: str | None = None) -> tuple
     account = repo.active_account(job_seeker_id, backend_key)
     if account is None:
         fallback = backend_key or get_settings().mail_backend
-        if fallback == "gmail_oauth":
+        # Both personal backends need a mailbox row; only the relay can run
+        # without one, so asking for either of them without a connected mailbox
+        # is a setup error rather than a reason to quietly use the relay.
+        if fallback in ("gmail_oauth", "imap_basic"):
             raise MailBackendNotConfigured(
-                "No Gmail mailbox is connected. Open Settings > Mail and connect one - it is "
-                "the backend that puts replies in your own inbox."
+                f"No {fallback} mailbox is connected. Open Settings > Mail and connect one - "
+                "these are the backends that put replies in your own inbox (Gmail over OAuth, "
+                "or any IMAP mailbox with an application password)."
             )
         # The relay needs no per-seeker row; it still has to be configured.
         account = {

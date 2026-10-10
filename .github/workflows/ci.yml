@@ -1,0 +1,81 @@
+# Continuous integration: the same three commands the README documents for a
+# contributor's machine (section "Running the checks"), run on every push and
+# pull request.  Nothing here is CI-specific, so a red job is reproducible
+# locally with the identical command - which is the whole point of mirroring
+# the README rather than inventing a second set of invocations.
+#
+#   PYTHONPATH=backend python3 -m pytest tests/unit tests/integration -q -m 'not llm and not load'
+#   python3 -m ruff check backend/dreamjob
+#   cd frontend && npm run build
+#
+# The `llm` and `load` markers are deselected on purpose: those tests need a live
+# model or a loaded API and have no place in a per-commit check.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# A newer push to the same branch cancels the run in progress: the unit suite
+# takes ~8 minutes and only the latest commit's verdict matters.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend - ruff + pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11" # pyproject: requires-python >= 3.11
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      # Lint first: it finishes in seconds, so an unused import does not wait
+      # eight minutes behind the test suite to be reported.
+      - name: Lint (ruff)
+        run: python3 -m ruff check backend/dreamjob
+
+      - name: Unit + integration tests
+        env:
+          # The tests create their own throwaway SQLite file and master key per
+          # test (see tests/unit/*.py fixtures); nothing here is a real secret.
+          DREAMJOB_ENV: development
+          DREAMJOB_MAIL_DRY_RUN: "true" # RK-05: belt and braces - no message may leave CI
+        run: >
+          PYTHONPATH=backend python3 -m pytest tests/unit tests/integration
+          -q -m 'not llm and not load' -p no:cacheprovider
+
+  frontend:
+    name: Frontend - vite build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # `npm ci` installs exactly the lockfile, so a build that passes here is
+      # the build that ships; `npm install` could silently resolve newer deps.
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build

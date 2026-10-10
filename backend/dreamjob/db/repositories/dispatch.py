@@ -24,6 +24,7 @@ Three groups of tables meet here and the isolation rules differ:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from dreamjob.db.connection import (
@@ -129,17 +130,31 @@ def active_account(job_seeker_id: str, backend: str | None = None) -> dict | Non
         sql += " AND backend = ?"
         params.append(backend)
     # A connected personal mailbox outranks the shared relay: replies must land
-    # in the job seeker's own inbox (section 2.4, RK-05).
-    sql += " ORDER BY CASE backend WHEN 'gmail_oauth' THEN 0 ELSE 1 END, connected_at DESC LIMIT 1"
+    # in the job seeker's own inbox (section 2.4, RK-05).  Both personal
+    # backends rank equally - gmail_oauth and imap_basic differ in how the
+    # mailbox is authorised, not in whose inbox the replies reach - so between
+    # two of them the most recently connected one wins.
+    sql += (
+        " ORDER BY CASE backend WHEN 'gmail_oauth' THEN 0 WHEN 'imap_basic' THEN 0 ELSE 1 END,"
+        " connected_at DESC LIMIT 1"
+    )
     return query_one(sql, tuple(params))
 
 
-def accounts_to_poll(backend: str | None = "gmail_oauth") -> list[dict]:
+def accounts_to_poll(backend: str | Sequence[str] | None = None) -> list[dict]:
+    """Connected mailboxes the inbox poller should read (FR-326).
+
+    ``backend`` takes one key or several, because a job seeker may have a Gmail
+    and an app-password mailbox connected at once and both are polled on one
+    pass.  The caller decides which keys those are - it reads them from the
+    backend capabilities - so this query never names a backend itself.
+    """
     sql = "SELECT * FROM mail_account WHERE is_active = 1 AND credentials_enc IS NOT NULL"
     params: tuple = ()
-    if backend:
-        sql += " AND backend = ?"
-        params = (backend,)
+    keys = [backend] if isinstance(backend, str) else list(backend or [])
+    if keys:
+        sql += f" AND backend IN ({', '.join('?' * len(keys))})"
+        params = tuple(keys)
     return query_all(sql, params)
 
 

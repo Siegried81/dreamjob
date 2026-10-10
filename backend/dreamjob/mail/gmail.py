@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -53,6 +52,7 @@ import httpx
 
 from dreamjob.config import get_settings
 from dreamjob.db.repositories import dispatch as repo
+from dreamjob.mail.base import CRYPTO_PURPOSE as BASE_CRYPTO_PURPOSE
 from dreamjob.mail.base import (
     BackendCapabilities,
     MailBackend,
@@ -61,9 +61,10 @@ from dreamjob.mail.base import (
     MailBackendUnavailable,
     OutgoingMessage,
     SendResult,
+    decrypt_credentials,
+    encrypt_credentials,
     register_backend,
 )
-from dreamjob.security.crypto import CryptoUnavailable, decrypt, encrypt
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +82,8 @@ SCOPES: tuple[str, ...] = (
 #: The scope IMAP (XOAUTH2) needs.  Never requested; recognised if already granted.
 IMAP_SCOPE = "https://mail.google.com/"
 
-CRYPTO_PURPOSE = "mail"
+#: Kept as an alias: the purpose is defined once, in :mod:`dreamjob.mail.base`.
+CRYPTO_PURPOSE = BASE_CRYPTO_PURPOSE
 STATE_TTL_SECONDS = 600
 #: Refresh a little early, so a long send does not straddle the expiry.
 EXPIRY_SKEW_SECONDS = 120
@@ -98,37 +100,20 @@ class GmailAuthError(MailBackendError):
 # ---------------------------------------------------------------------------
 
 
+# The envelope itself lives in :mod:`dreamjob.mail.base` so that every backend
+# seals its credential the same way; these two wrappers only name Gmail in the
+# error text, which is what the job seeker reads.
 def _encrypt_credentials(credentials: dict, job_seeker_id: str) -> bytes:
-    try:
-        return encrypt(
-            json.dumps(credentials).encode("utf-8"),
-            purpose=CRYPTO_PURPOSE,
-            scope=job_seeker_id,
-        )
-    except CryptoUnavailable as exc:
-        raise GmailAuthError(
-            "Cannot store a Gmail refresh token: DREAMJOB_MASTER_KEY is not set, and NFR-204 "
-            "requires mailbox tokens to be encrypted at rest. Generate one with "
-            "`python -m dreamjob.security.crypto --generate-key` and restart."
-        ) from exc
+    return encrypt_credentials(credentials, job_seeker_id, what="Gmail mailbox")
 
 
 def _decrypt_credentials(blob: bytes | None, job_seeker_id: str) -> dict:
-    if not blob:
-        raise MailBackendNotConfigured(
-            "This Gmail mailbox is not connected. Open Settings > Mail and connect it again."
-        )
-    try:
-        return json.loads(decrypt(bytes(blob), purpose=CRYPTO_PURPOSE, scope=job_seeker_id))
-    except CryptoUnavailable as exc:
-        raise GmailAuthError(
-            "DREAMJOB_MASTER_KEY is not set, so the stored Gmail token cannot be decrypted."
-        ) from exc
-    except Exception as exc:  # noqa: BLE001 - a wrong key looks exactly like corruption
-        raise GmailAuthError(
-            "The stored Gmail credential could not be decrypted (wrong master key, or the "
-            "credential was written under a different one). Reconnect the mailbox."
-        ) from exc
+    return decrypt_credentials(
+        blob,
+        job_seeker_id,
+        what="Gmail mailbox",
+        reconnect_hint="Open Settings > Mail and connect it again.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +373,18 @@ class GmailBackend(MailBackend):
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.access_token()}"}
+
+    # -- the IMAP transport's view of this mailbox -------------------------
+    # ``mail.inbox.poll_imap`` asks the backend where to connect and how to
+    # authenticate rather than branching on the backend's name, so a second
+    # IMAP-speaking backend needs no change there at all.
+    def imap_endpoint(self) -> tuple[str, int]:
+        s = get_settings()
+        return s.imap_host, s.imap_port
+
+    def imap_password(self) -> str | None:
+        """``None`` means "authenticate with XOAUTH2", which is Gmail's way."""
+        return None
 
     # -- MailBackend ------------------------------------------------------
     def sender_address(self) -> str:

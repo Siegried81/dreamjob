@@ -2,10 +2,13 @@
 
 Four surfaces:
 
-* ``/status``, ``/accounts``, ``/gmail/*`` - connecting and disconnecting a
-  mailbox.  ``/gmail/callback`` is the loopback redirect target and is the one
-  route here without a session: the browser arrives from Google, and the
-  single-use ``state`` row is what identifies the job seeker (NFR-204).
+* ``/status``, ``/accounts``, ``/gmail/*``, ``/imap/*`` - connecting and
+  disconnecting a mailbox.  ``/gmail/callback`` is the loopback redirect target
+  and is the one route here without a session: the browser arrives from Google,
+  and the single-use ``state`` row is what identifies the job seeker (NFR-204).
+  ``/imap/connect`` is the equivalent for a provider with no OAuth programme -
+  Yahoo, iCloud, a self-hosted server - which issues an application password
+  instead; it verifies the credential against the provider before storing it.
   ``/accounts/{id}/revoke`` is the "revocable from the UI" half of NFR-204.
 * ``/send``, ``/send-check``, ``/queue/process`` - dispatch.  Every guard rail
   lives in :mod:`dreamjob.mail.dispatcher`, so a client cannot talk its way
@@ -26,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from dreamjob.api.deps import CurrentSeeker, current_admin, current_seeker
 from dreamjob.db.repositories import dispatch as repo
-from dreamjob.mail import gmail, inbox, resend_backend
+from dreamjob.mail import gmail, imap_basic, inbox, resend_backend
 from dreamjob.mail.base import (
     MailBackendError,
     MailBackendNotConfigured,
@@ -59,7 +62,7 @@ router = APIRouter()
 class SendIn(BaseModel):
     application_package_id: str
     backend: str | None = Field(
-        None, description="gmail_oauth | resend; default: the connected mailbox"
+        None, description="gmail_oauth | imap_basic | resend; default: the connected mailbox"
     )
     ignore_window: bool = Field(
         False, description="Send outside the recipient's working hours (FR-325 override)"
@@ -77,6 +80,24 @@ class MailSettingsIn(BaseModel):
 
 class WebhookSecretIn(BaseModel):
     secret: str = Field(min_length=8, max_length=200)
+
+
+class ImapConnectIn(BaseModel):
+    """Connect a mailbox that authenticates with an application password.
+
+    ``provider`` fills the hosts from a preset; ``imap_host``/``smtp_host``
+    override it, so a self-hosted server needs no preset.  The password is
+    never echoed back - not in the response, not in the audit detail.
+    """
+
+    address: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=512, description="Provider app password")
+    provider: str | None = Field(None, description="yahoo | icloud | outlook | gmail")
+    imap_host: str | None = None
+    imap_port: int | None = Field(None, ge=1, le=65535)
+    smtp_host: str | None = None
+    smtp_port: int | None = Field(None, ge=1, le=65535)
+    folder: str = Field("INBOX", max_length=200, description="IMAP folder the poller reads")
 
 
 def _bad_request(exc: Exception) -> HTTPException:
@@ -121,11 +142,15 @@ def revoke_account(account_id: str, seeker: CurrentSeeker = Depends(current_seek
     account = repo.get_account(account_id, seeker.id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Mailbox not found")
-    if account["backend"] != "gmail_oauth":
-        repo.clear_credentials(account_id)
-        result: dict[str, Any] = {"revoked_locally": True, "revoked_at_google": False}
+    if account["backend"] == "gmail_oauth":
+        result: dict[str, Any] = gmail.revoke(account)
+    elif account["backend"] == imap_basic.BACKEND_KEY:
+        # An app password has no revocation endpoint; the result carries the
+        # provider page where the job seeker finishes the job themselves.
+        result = imap_basic.disconnect(account)
     else:
-        result = gmail.revoke(account)
+        repo.clear_credentials(account_id)
+        result = {"revoked_locally": True, "revoked_at_google": False}
     record_audit(
         "mail_account.revoked",
         "mail_account",
@@ -142,8 +167,11 @@ def delete_account(account_id: str, seeker: CurrentSeeker = Depends(current_seek
     account = repo.get_account(account_id, seeker.id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Mailbox not found")
-    if account["backend"] == "gmail_oauth" and account.get("credentials_enc"):
-        gmail.revoke(account)
+    if account.get("credentials_enc"):
+        if account["backend"] == "gmail_oauth":
+            gmail.revoke(account)
+        elif account["backend"] == imap_basic.BACKEND_KEY:
+            imap_basic.disconnect(account)
     repo.delete_account(account_id, seeker.id)
     record_audit(
         "mail_account.deleted",
@@ -156,6 +184,61 @@ def delete_account(account_id: str, seeker: CurrentSeeker = Depends(current_seek
 
 
 # --- Gmail OAuth (NFR-204) -------------------------------------------------
+
+
+# --- IMAP + app password (FR-325, NFR-204) --------------------------------
+
+
+@router.get("/imap/providers")
+def imap_providers() -> dict:
+    """Presets for the connect form, each with the page that issues the password."""
+    return {
+        "providers": imap_basic.provider_choices(),
+        "default_imap_port": imap_basic.DEFAULT_IMAP_PORT,
+        "default_smtp_port": imap_basic.DEFAULT_SMTP_PORT,
+    }
+
+
+@router.post("/imap/connect")
+def imap_connect(
+    payload: ImapConnectIn, seeker: CurrentSeeker = Depends(current_seeker)
+) -> dict:
+    """Verify an application password against the provider, then store it.
+
+    Verification is not optional here: a credential that only fails at the next
+    poll makes a mailbox that looks connected and reads nothing, because the
+    poller swallows per-account errors so one bad mailbox cannot stop the rest.
+    """
+    try:
+        account = imap_basic.connect(
+            seeker.id,
+            address=payload.address,
+            password=payload.password,
+            provider=payload.provider,
+            imap_host=payload.imap_host,
+            imap_port=payload.imap_port,
+            smtp_host=payload.smtp_host,
+            smtp_port=payload.smtp_port,
+            folder=payload.folder,
+        )
+    except MailBackendError as exc:
+        raise _bad_request(exc) from exc
+    record_audit(
+        "mail_account.connected",
+        "mail_account",
+        account["id"],
+        seeker_id=seeker.id,
+        # The password is deliberately absent: an audit row is readable by an
+        # admin, and NFR-204 keeps the credential to the encrypted blob only.
+        detail={
+            "backend": account["backend"],
+            "address": account["address"],
+            "provider": account.get("provider"),
+            "imap_host": account.get("imap_host"),
+            "folder": account.get("folder"),
+        },
+    )
+    return {**account, "sending_armed": imap_basic.sending_is_armed()}
 
 
 @router.get("/gmail/authorize")
